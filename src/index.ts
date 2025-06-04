@@ -1,17 +1,13 @@
 import TelegramBot from "node-telegram-bot-api";
-import { snapsave } from "./snapsave";
-import { randomUUID } from "crypto";
-import { access, mkdir, unlink, writeFile } from "fs/promises";
-import { join } from "path";
-
+import { snapsave } from "snapsave-media-downloader";
+import { youtube } from "btch-downloader";
 
 const token = Bun.env.TELEGRAM_BOT!;
+Bun.env.NTBA_FIX_350 = "1";
 const bot = new TelegramBot(token, { polling: true });
 const ADMIN_CHAT_ID = Bun.env.ADMIN_CHAT_ID!;
 const BOT_TAG = "@instg_save_bot";
-
-const baseDir = process.cwd();
-const mediaPath = join(baseDir, "media");
+const ADMIN_USERNAME = "@jullieem";
 
 const sendErrorToAdmin = async (error: any, context: string) => {
   const errorMessage = `❌ Error in ${context}:\n${error.message || error}\n\nStack: ${error.stack || "No stack trace"}`;
@@ -23,41 +19,16 @@ const sendErrorToAdmin = async (error: any, context: string) => {
   }
 };
 
-const checkMediaFolder = async () => {
-  try {
-    await access(mediaPath);
-    console.info("Media folder found at:", mediaPath);
-  }
-  catch {
-    console.info("Creating media folder at:", mediaPath);
-    await mkdir(mediaPath, { recursive: true });
-  }
-};
-
-const saveTempFile = async (buffer: Buffer, extension: string): Promise<string> => {
-  const filename = `${randomUUID()}.${extension}`;
-  const filepath = join(mediaPath, filename);
-  await writeFile(filepath, buffer);
-  return filepath;
-};
-
-const cleanupFile = async (filepath: string) => {
-  try {
-    await unlink(filepath);
-  }
-  catch (error) {
-    console.warn("Error cleaning up file:", error);
-    await sendErrorToAdmin(error, "cleanupFile");
-  }
+const isYoutubeShortsLink = (url: string): boolean => {
+  return url.includes("youtube.com/shorts/") || url.includes("youtu.be/shorts/");
 };
 
 const main = async () => {
   try {
-    await checkMediaFolder();
     console.info("Bot started");
 
     bot.onText(/\/start/, (msg) => {
-      bot.sendMessage(msg.chat.id, "Привет! Я бот для скачивания медиа из TikTok и Instagram. Отправь мне ссылку на видео или фото, и я скачаю его для тебя." + "\n\n" + "По всем вопросам @void_0x");
+      bot.sendMessage(msg.chat.id, "Привет! Я бот для скачивания медиа из TikTok, Twitter, Youtube Shorts, Facebook и Instagram. Отправь мне ссылку на видео или фото, и я скачаю его для тебя." + "\n\n" + "По всем вопросам " + ADMIN_USERNAME);
       return;
     });
 
@@ -66,15 +37,65 @@ const main = async () => {
       const message = msg.text;
 
       if (message === "/start") return;
-      if (message &&!message.includes("https://") && message.length < 10) {
+      if (message && !message.includes("https://")) {
         await bot.sendMessage(chatId, "Неверная ссылка. Попробуйте еще раз.");
         return;
+      }
+      let isShorts = false;
+      if (message && message.trim() !== "" && isYoutubeShortsLink(message)) {
+        isShorts = true;
+      }
+
+      if (isShorts) {
+        try {
+          const response = await youtube(message);
+
+          if (response && response.mp4) {
+            const loadingMsg = await bot.sendMessage(chatId, "Загружаю...");
+
+            try {
+              const videoResponse = await fetch(response.mp4);
+              const videoBuffer = Buffer.from(await videoResponse.arrayBuffer());
+
+              await bot.sendVideo(chatId, videoBuffer, {
+                caption: BOT_TAG
+              });
+
+              try {
+                await bot.deleteMessage(chatId, loadingMsg.message_id);
+              }
+              catch (deleteError) {
+                console.warn("Could not delete loading message:", deleteError);
+              }
+
+            }
+            catch (sendError) {
+              console.error("Error sending YouTube video:", sendError);
+              await bot.sendMessage(chatId, "Не удалось отправить видео с YouTube Shorts.");
+              await sendErrorToAdmin(sendError, "youtube video send");
+            }
+          }
+          else {
+            await bot.sendMessage(chatId, "Не удалось получить видео с YouTube Shorts.");
+            await sendErrorToAdmin("No mp4 URL in YouTube response", "youtube mp4 check");
+          }
+        }
+        catch (error) {
+          console.error("Error fetching YouTube data:", error);
+          await bot.sendMessage(chatId, "Не удалось скачать видео с YouTube Shorts. Попробуйте еще раз.");
+          await sendErrorToAdmin(error, "youtube download");
+          return;
+        }
+        finally {
+          isShorts = false;
+          return;
+        }
       }
 
       try {
         const download = await snapsave(message && message.trim() !== "" ? message : "");
         if (!download.success) {
-          await bot.sendMessage(chatId, "Не удалось скачать медиафайл." + "\n" + "Если ошибка возникает многократно, пишите @void_0x");
+          await bot.sendMessage(chatId, "Не удалось скачать медиафайл." + "\n" + "Если ошибка возникает многократно, пишите " + ADMIN_USERNAME);
           await sendErrorToAdmin({
             error: download,
             message: message,
@@ -105,15 +126,13 @@ const main = async () => {
             }
             const videoResponse = await fetch(video.url);
             const videoBuffer = Buffer.from(await videoResponse.arrayBuffer());
-            const videoPath = await saveTempFile(videoBuffer, "mp4");
 
             try {
-              await bot.sendVideo(chatId, videoPath, {
+              await bot.sendVideo(chatId, videoBuffer, {
                 caption: BOT_TAG
               });
             }
             finally {
-              await cleanupFile(videoPath);
             }
           }
           else if (videos.length > 1) {
@@ -122,24 +141,47 @@ const main = async () => {
             );
 
             if (validVideos.length > 0) {
-              const videoPaths: string[] = [];
-
               try {
-                for (const video of validVideos) {
-                  const videoResponse = await fetch(video.url);
-                  const videoBuffer = Buffer.from(await videoResponse.arrayBuffer());
-                  const videoPath = await saveTempFile(videoBuffer, "mp4");
-                  videoPaths.push(videoPath);
+                const videoGroups: typeof validVideos[] = [];
+                for (let i = 0; i < validVideos.length; i += 10) {
+                  videoGroups.push(validVideos.slice(i, i + 10));
                 }
 
-                await bot.sendMediaGroup(chatId, videoPaths.map((path, index) => ({
-                  type: "video",
-                  media: path,
-                  caption: index === 0 ? BOT_TAG : undefined
-                })));
+                for (let groupIndex = 0; groupIndex < videoGroups.length; groupIndex++) {
+                  const videoGroup = videoGroups[groupIndex];
+                  let mediaBuffers: { buffer: Buffer, index: number }[] = [];
+
+                  try {
+                    for (let i = 0; i < videoGroup.length; i++) {
+                      const video = videoGroup[i];
+                      const videoResponse = await fetch(video.url);
+                      const videoBuffer = Buffer.from(await videoResponse.arrayBuffer());
+                      mediaBuffers.push({ buffer: videoBuffer, index: i });
+                    }
+
+                    const media: TelegramBot.InputMediaVideo[] = mediaBuffers.map(({ buffer, index }) => ({
+                      type: "video",
+                      media: buffer as any,
+                      caption: index === 0 && groupIndex === 0 ? BOT_TAG : undefined
+                    }));
+
+                    // Отправляем группу
+                    await bot.sendMediaGroup(chatId, media);
+
+                    if (groupIndex < videoGroups.length - 1) {
+                      await new Promise(resolve => setTimeout(resolve, 500));
+                    }
+                  }
+                  finally {
+                    if (mediaBuffers.length > 0) {
+                      mediaBuffers.length = 0;
+                    }
+                  }
+                }
               }
-              finally {
-                await Promise.all(videoPaths.map(cleanupFile));
+              catch (error) {
+                console.error("Error sending video media groups:", error);
+                await sendErrorToAdmin(error, "sendMediaGroup videos");
               }
             }
           }
@@ -153,15 +195,13 @@ const main = async () => {
             }
             const photoResponse = await fetch(photo.url);
             const photoBuffer = Buffer.from(await photoResponse.arrayBuffer());
-            const photoPath = await saveTempFile(photoBuffer, "jpg");
 
             try {
-              await bot.sendPhoto(chatId, photoPath, {
+              await bot.sendPhoto(chatId, photoBuffer, {
                 caption: BOT_TAG
               });
             }
             finally {
-              await cleanupFile(photoPath);
             }
           }
           else if (photos.length > 1) {
@@ -170,24 +210,46 @@ const main = async () => {
             );
 
             if (validPhotos.length > 0) {
-              const photoPaths: string[] = [];
-
               try {
-                for (const photo of validPhotos) {
-                  const photoResponse = await fetch(photo.url);
-                  const photoBuffer = Buffer.from(await photoResponse.arrayBuffer());
-                  const photoPath = await saveTempFile(photoBuffer, "jpg");
-                  photoPaths.push(photoPath);
+                const photoGroups: typeof validPhotos[] = [];
+                for (let i = 0; i < validPhotos.length; i += 10) {
+                  photoGroups.push(validPhotos.slice(i, i + 10));
                 }
 
-                await bot.sendMediaGroup(chatId, photoPaths.map((path, index) => ({
-                  type: "photo",
-                  media: path,
-                  caption: index === 0 ? BOT_TAG : undefined
-                })));
+                for (let groupIndex = 0; groupIndex < photoGroups.length; groupIndex++) {
+                  const photoGroup = photoGroups[groupIndex];
+                  let mediaBuffers: { buffer: Buffer, index: number }[] = [];
+
+                  try {
+                    for (let i = 0; i < photoGroup.length; i++) {
+                      const photo = photoGroup[i];
+                      const photoResponse = await fetch(photo.url);
+                      const photoBuffer = Buffer.from(await photoResponse.arrayBuffer());
+                      mediaBuffers.push({ buffer: photoBuffer, index: i });
+                    }
+
+                    const media: TelegramBot.InputMediaPhoto[] = mediaBuffers.map(({ buffer, index }) => ({
+                      type: "photo",
+                      media: buffer as any,
+                      caption: index === 0 && groupIndex === 0 ? BOT_TAG : undefined
+                    }));
+
+                    await bot.sendMediaGroup(chatId, media);
+
+                    if (groupIndex < photoGroups.length - 1) {
+                      await new Promise(resolve => setTimeout(resolve, 500));
+                    }
+                  }
+                  finally {
+                    if (mediaBuffers.length > 0) {
+                      mediaBuffers.length = 0;
+                    }
+                  }
+                }
               }
-              finally {
-                await Promise.all(photoPaths.map(cleanupFile));
+              catch (error) {
+                console.error("Error sending photo media groups:", error);
+                await sendErrorToAdmin(error, "sendMediaGroup photos");
               }
             }
           }
