@@ -78,7 +78,10 @@ export const sendErrorToAdmin = async (
 
   for (const adminId of ADMIN_USER_IDS) {
     try {
-      await bot.sendMessage(adminId, errorMessage);
+      await bot.sendMessage(adminId, errorMessage, {
+        // eslint-disable-next-line camelcase
+        disable_notification: true
+      });
     }
     catch (e) {
       console.warn(`Failed to send error to admin ${adminId}:`, e);
@@ -126,9 +129,8 @@ export const processMediaGroup = async (
   username?: string
 ) => {
   const validMedia = mediaItems.filter((item) =>
-    item.url !== undefined && item.type === mediaType
+    item.url !== undefined && (item.type === "video" || item.type === "image")
   );
-
   if (validMedia.length === 0) return;
 
   const mediaGroups: typeof validMedia[] = [];
@@ -149,7 +151,7 @@ export const processMediaGroup = async (
       const telegramMedia = mediaBuffers.map(({ buffer, index }) => ({
         type: mediaType,
         media: buffer as any,
-        caption: index === 0 && groupIndex === 0 ? BOT_TAG : undefined
+        caption: index === 0 ? BOT_TAG : undefined
       }));
 
       await bot.sendMediaGroup(chatId, telegramMedia);
@@ -206,11 +208,19 @@ export const processYouTubeShorts = async (bot: TelegramBot, chatId: number, mes
   }
 };
 
+const handleUnderlineEnding = (text: string): string => {
+  if (text.endsWith("_")) {
+    return text + "/";
+  }
+  return text;
+};
+
 export const processSocialMedia = async (bot: TelegramBot, chatId: number, message: string, username?: string, firstName?: string) => {
   const platform = detectPlatform(message);
 
   try {
-    const download = await snapsave(message);
+    const formattedMessage = handleUnderlineEnding(message);
+    const download = await snapsave(formattedMessage);
 
     if (!download.success) {
       await bot.sendMessage(
@@ -232,33 +242,30 @@ export const processSocialMedia = async (bot: TelegramBot, chatId: number, messa
 
     const videos = media.filter((m) => m.type === "video");
     const photos = media.filter((m) => m.type === "image");
-
     const loadingMsg = await bot.sendMessage(chatId, "Загружаю...");
 
     let hasSuccessfulDownload = false;
 
     try {
-      if (videos.length === 1 && photos.length === 0) {
+      if (videos.length === 1) {
         await processSingleVideo(bot, chatId, videos[0], username);
         hasSuccessfulDownload = true;
       }
-      else if (photos.length === 1 && videos.length === 0) {
+      else if (videos.length > 1) {
+        await processMediaGroup(bot, chatId, videos, "video", username);
+        hasSuccessfulDownload = true;
+      }
+
+      if (photos.length === 1) {
         await processSinglePhoto(bot, chatId, photos[0], username);
         hasSuccessfulDownload = true;
       }
-      else {
-        if (videos.length > 0) {
-          await processMediaGroup(bot, chatId, videos, "video", username);
-          hasSuccessfulDownload = true;
-        }
-        if (photos.length > 0) {
-          await processMediaGroup(bot, chatId, photos, "photo", username);
-          hasSuccessfulDownload = true;
-        }
+      else if (photos.length > 1) {
+        await processMediaGroup(bot, chatId, photos, "photo", username);
+        hasSuccessfulDownload = true;
       }
-
       if (hasSuccessfulDownload) {
-        recordDownload(chatId, message, platform, videos.length > 0 ? "video" : "image", true);
+        recordDownload(chatId, message, platform, videos.length > 0 ? "video" : "photo", true);
 
         await bot.deleteMessage(chatId, loadingMsg.message_id).catch(async (error) => {
           await sendErrorToAdmin(bot, error, "delete loading message", message, chatId, username);

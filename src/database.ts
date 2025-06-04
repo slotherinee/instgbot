@@ -52,8 +52,7 @@ export const upsertUser = (chatId: number, username?: string, firstName?: string
 
   // Check if user exists
   const existingUser = db.query("SELECT id FROM users WHERE chat_id = ?").get(chatId) as { id: number } | undefined;
-
-  if (existingUser) {
+  if (existingUser?.id) {
     // Update existing user
     db.query(`
       UPDATE users 
