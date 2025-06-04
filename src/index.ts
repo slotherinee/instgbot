@@ -6,6 +6,7 @@ import {
 } from "./database";
 import {
   BOT_TAG,
+  helpMessage,
   isAdmin,
   isYoutubeShortsLink,
   processSocialMedia,
@@ -45,14 +46,14 @@ bot.onText(/(.+)/, async (msg, match) => {
   const userId = msg.from?.id;
   const username = msg.from?.username;
   const firstName = msg.from?.first_name;
-  const message = match?.[1];
+  const message = match?.[1]!;
 
   if (message && message === "/start") {
     return;
   }
 
-  if (!message) {
-    await bot.sendMessage(chatId, "Отправьте ссылку на видео для скачивания.");
+  if (message && message === "/help") {
+    await bot.sendMessage(chatId, helpMessage);
     return;
   }
 
@@ -60,10 +61,17 @@ bot.onText(/(.+)/, async (msg, match) => {
     upsertUser(chatId, username, firstName);
     updateUserActivity(chatId);
 
-    // Handle admin commands
     if (isAdmin(userId)) {
       const handled = await handleAdminCommands(bot, chatId, message, userId);
       if (handled) return;
+    }
+
+    const isValidUrl = message && (message.includes("https://") || message.includes("http://")) &&
+                       message.trim() !== "" && message.trim().length >= 10;
+
+    if (!isValidUrl) {
+      await bot.sendMessage(chatId, helpMessage);
+      return;
     }
 
     if (isYoutubeShortsLink(message)) {

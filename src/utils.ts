@@ -302,3 +302,19 @@ export const shutdown = async (signal: string, bot: TelegramBot) => {
     process.exit(1);
   }
 };
+
+
+export const helpMessage = [
+  "Отправьте ссылку на видео для скачивания.",
+  "",
+  "Поддерживаемые платформы:",
+  "• TikTok",
+  "• Instagram (рилсы, посты, сторис)",
+  "• Facebook (видео)",
+  "• Twitter (X) (картинки и видео)",
+  "• YouTube Shorts",
+  "",
+  "Пример: https://www.instagram.com/reel/DKKPO_gyGAg/?igsh=ejVqOTBpNm85OHA0",
+  "",
+  BOT_TAG
+].join("\n");
