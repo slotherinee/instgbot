@@ -4,8 +4,8 @@
   "description": "Download Instagram, Facebook and TikTok media using snapsave.app downloader",
   "type": "module",
   "scripts": {
-    "start": "bun run src/index.ts",
-    "watch": "bun run --watch src/index.ts"
+    "start": "bun run ./main.ts",
+    "watch": "bun run --watch ./main.ts"
   },
   "keywords": [
     "instagram",
