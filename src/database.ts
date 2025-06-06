@@ -71,8 +71,8 @@ export const upsertUser = (chatId: number, username?: string, firstName?: string
   }
 };
 
-export const recordDownload = (chatId: number, url: string, platform: string, mediaType: string, success: boolean) => {
-  const userId = upsertUser(chatId);
+export const recordDownload = (chatId: number, url: string, platform: string, mediaType: string, success: boolean, username?: string, firstName?: string) => {
+  const userId = upsertUser(chatId, username, firstName);
   const now = new Date().toISOString();
 
   db.query(`

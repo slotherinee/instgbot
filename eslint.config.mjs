@@ -15,7 +15,6 @@ export default [
       parser: parserTs
     },
     rules: {
-      "camelcase": ["error"],
       "no-console": ["error", { allow: ["info", "warn", "log", "error"] }],
       "@stylistic/indent": ["error", 2, { SwitchCase: 1 }],
       "@stylistic/linebreak-style": ["error", process.platform === "win32" ? "windows" : "unix"],

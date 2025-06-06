@@ -79,7 +79,6 @@ export const sendErrorToAdmin = async (
   for (const adminId of ADMIN_USER_IDS) {
     try {
       await bot.sendMessage(adminId, errorMessage, {
-        // eslint-disable-next-line camelcase
         disable_notification: true
       });
     }
@@ -102,7 +101,7 @@ export const processSingleVideo = async (
   }
 
   const videoBuffer = await downloadBuffer(video.url);
-  await bot.sendVideo(chatId, videoBuffer, { caption: BOT_TAG });
+  await bot.sendVideo(chatId, videoBuffer, { caption: BOT_TAG, disable_notification: true });
 };
 
 export const processSinglePhoto = async (
@@ -118,7 +117,7 @@ export const processSinglePhoto = async (
   }
 
   const photoBuffer = await downloadBuffer(photo.url);
-  await bot.sendPhoto(chatId, photoBuffer, { caption: BOT_TAG });
+  await bot.sendPhoto(chatId, photoBuffer, { caption: BOT_TAG, disable_notification: true });
 };
 
 export const processMediaGroup = async (
@@ -154,7 +153,9 @@ export const processMediaGroup = async (
         caption: index === 0 ? BOT_TAG : undefined
       }));
 
-      await bot.sendMediaGroup(chatId, telegramMedia);
+      await bot.sendMediaGroup(chatId, telegramMedia, {
+        disable_notification: true
+      });
 
       if (groupIndex < mediaGroups.length - 1) {
         await new Promise(resolve => setTimeout(resolve, 500));
@@ -176,35 +177,38 @@ export const processYouTubeShorts = async (bot: TelegramBot, chatId: number, mes
     const response = await youtube(message);
 
     if (response && response.mp4) {
-      const loadingMsg = await bot.sendMessage(chatId, "Загружаю...");
+      const loadingMsg = await bot.sendMessage(chatId, "Загружаю...", {
+        disable_notification: true
+      });
 
       try {
         const videoBuffer = await downloadBuffer(response.mp4);
 
         await bot.sendVideo(chatId, videoBuffer, {
-          caption: BOT_TAG
+          caption: BOT_TAG,
+          disable_notification: true
         });
 
         await bot.deleteMessage(chatId, loadingMsg.message_id).catch(() => {});
 
-        recordDownload(chatId, message, platform, "video", true);
+        recordDownload(chatId, message, platform, "video", true, username, firstName);
       }
       catch (sendError) {
         await bot.sendMessage(chatId, "Не удалось отправить видео с YouTube Shorts.");
         await sendErrorToAdmin(bot, sendError, "youtube video send", message, chatId, username);
-        recordDownload(chatId, message, platform, "video", false);
+        recordDownload(chatId, message, platform, "video", false, username, firstName);
       }
     }
     else {
       await bot.sendMessage(chatId, "Не удалось получить видео с YouTube Shorts.");
       await sendErrorToAdmin(bot, "No mp4 URL in YouTube response", "youtube mp4 check", message, chatId, username);
-      recordDownload(chatId, message, platform, "video", false);
+      recordDownload(chatId, message, platform, "video", false, username, firstName);
     }
   }
   catch (error) {
     await bot.sendMessage(chatId, "Не удалось скачать видео с YouTube Shorts. Попробуйте еще раз.");
     await sendErrorToAdmin(bot, error, "youtube download", message, chatId, username);
-    recordDownload(chatId, message, platform, "video", false);
+    recordDownload(chatId, message, platform, "video", false, username, firstName);
   }
 };
 
@@ -228,7 +232,7 @@ export const processSocialMedia = async (bot: TelegramBot, chatId: number, messa
         `Не удалось скачать медиафайл.\nЕсли ошибка возникает многократно, пишите ${ADMIN_USERNAME}`
       );
       await sendErrorToAdmin(bot, download, "snapsave download", message, chatId, username);
-      recordDownload(chatId, message, platform, "unknown", false);
+      recordDownload(chatId, message, platform, "unknown", false, username, firstName);
       return;
     }
 
@@ -236,13 +240,15 @@ export const processSocialMedia = async (bot: TelegramBot, chatId: number, messa
     if (!media) {
       await bot.sendMessage(chatId, "Не удалось скачать медиа. Попробуйте еще раз.");
       await sendErrorToAdmin(bot, "No media in response", "media check", message, chatId, username);
-      recordDownload(chatId, message, platform, "unknown", false);
+      recordDownload(chatId, message, platform, "unknown", false, username, firstName);
       return;
     }
 
     const videos = media.filter((m) => m.type === "video");
     const photos = media.filter((m) => m.type === "image");
-    const loadingMsg = await bot.sendMessage(chatId, "Загружаю...");
+    const loadingMsg = await bot.sendMessage(chatId, "Загружаю...", {
+      disable_notification: true
+    });
 
     let hasSuccessfulDownload = false;
 
@@ -265,7 +271,7 @@ export const processSocialMedia = async (bot: TelegramBot, chatId: number, messa
         hasSuccessfulDownload = true;
       }
       if (hasSuccessfulDownload) {
-        recordDownload(chatId, message, platform, videos.length > 0 ? "video" : "photo", true);
+        recordDownload(chatId, message, platform, videos.length > 0 ? "video" : "photo", true, username, firstName);
 
         await bot.deleteMessage(chatId, loadingMsg.message_id).catch(async (error) => {
           await sendErrorToAdmin(bot, error, "delete loading message", message, chatId, username);
@@ -274,14 +280,14 @@ export const processSocialMedia = async (bot: TelegramBot, chatId: number, messa
 
     }
     catch (error) {
-      recordDownload(chatId, message, platform, "unknown", false);
+      recordDownload(chatId, message, platform, "unknown", false, username, firstName);
       await sendErrorToAdmin(bot, error, "main message handler", message, chatId, username);
     }
   }
   catch (error) {
     await bot.sendMessage(chatId, "Произошла ошибка при обработке запроса.");
     await sendErrorToAdmin(bot, error, "snapsave download", message, chatId, username);
-    recordDownload(chatId, message, platform, "unknown", false);
+    recordDownload(chatId, message, platform, "unknown", false, username, firstName);
   }
 };
 

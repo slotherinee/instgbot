@@ -114,7 +114,7 @@ export const handleAdminCommands = async (
     case "/platforms":
       await handlePlatformsCommand(bot, chatId);
       return true;
-    case "/adminhelp":
+    case "/ah":
       await handleAdminHelpCommand(bot, chatId);
       return true;
     default:
@@ -282,7 +282,7 @@ const handleAdminHelpCommand = async (bot: TelegramBot, chatId: number) => {
     "🏆 /top [количество] - топ пользователей",
     "🚨 /errors [количество] - последние ошибки",
     "📱 /platforms - статистика по платформам",
-    "❓ /adminhelp - эта справка",
+    "❓ /ah - эта справка",
     "",
     "Примеры:",
     "• /users 10 - показать 10 пользователей",
