@@ -57,6 +57,16 @@ bot.onText(/(.+)/, async (msg, match) => {
     return;
   }
 
+  const isValidUrl = message && (message.includes("https://") || message.includes("http://")) &&
+                     message.trim() !== "" && message.trim().length >= 10;
+
+  const isAdminCommand = isAdmin(userId) && message && message.startsWith("/");
+
+  if (!isValidUrl && !isAdminCommand) {
+    await bot.sendMessage(chatId, helpMessage);
+    return;
+  }
+
   try {
     upsertUser(chatId, username, firstName);
     updateUserActivity(chatId);
@@ -64,14 +74,6 @@ bot.onText(/(.+)/, async (msg, match) => {
     if (isAdmin(userId)) {
       const handled = await handleAdminCommands(bot, chatId, message, userId);
       if (handled) return;
-    }
-
-    const isValidUrl = message && (message.includes("https://") || message.includes("http://")) &&
-                       message.trim() !== "" && message.trim().length >= 10;
-
-    if (!isValidUrl) {
-      await bot.sendMessage(chatId, helpMessage);
-      return;
     }
 
     if (isYoutubeShortsLink(message)) {

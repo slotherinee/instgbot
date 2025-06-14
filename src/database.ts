@@ -63,7 +63,6 @@ export const upsertUser = (chatId: number, username?: string, firstName?: string
         VALUES (?, ?, ?, ?, ?)
       `).run(username || null, firstName || null, chatId, now, now);
 
-      console.log("Database insert result:", result);
 
       if (!result) {
         throw new Error("Database insert returned null/undefined result");
