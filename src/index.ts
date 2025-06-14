@@ -92,13 +92,6 @@ bot.onText(/(.+)/, async (msg, match) => {
       return;
     }
 
-    try {
-      await bot.sendMessage(chatId, "Произошла общая ошибка. Попробуйте еще раз.");
-    }
-    catch (sendError) {
-      console.log(`Cannot send error message to user ${chatId}:`, sendError);
-    }
-
     await sendErrorToAdmin(bot, error, "main function", message, chatId, username);
   }
 });
