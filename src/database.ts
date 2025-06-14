@@ -2,15 +2,6 @@ import { Database } from "bun:sqlite";
 
 export const db = new Database("bot_data.sqlite", { create: true });
 
-try {
-  db.query("SELECT 1").get();
-  console.log("Database connection established successfully");
-}
-catch (error) {
-  console.error("Database connection failed:", error);
-  throw new Error("Cannot connect to database");
-}
-
 db.exec(`
   CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -52,19 +43,6 @@ db.exec(`
 db.exec("CREATE INDEX IF NOT EXISTS idx_users_chat_id ON users (chat_id)");
 db.exec("CREATE INDEX IF NOT EXISTS idx_downloads_user_id ON downloads (user_id)");
 db.exec("CREATE INDEX IF NOT EXISTS idx_errors_user_id ON errors (user_id)");
-
-try {
-  const testQuery = db.query("SELECT name FROM sqlite_master WHERE type='table'").all();
-  console.log("Database tables:", testQuery.map((t: any) => t.name));
-
-  // Test insert/select functionality
-  const testUser = db.query("SELECT COUNT(*) as count FROM users").get() as { count: number };
-  console.log("Database working properly, user count:", testUser.count);
-}
-catch (error) {
-  console.error("Database verification failed:", error);
-  throw new Error("Database setup verification failed");
-}
 
 export const upsertUser = (chatId: number, username?: string, firstName?: string): number => {
   const now = new Date().toISOString();
