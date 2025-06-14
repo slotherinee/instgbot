@@ -29,6 +29,17 @@ export const sendErrorToAdmin = async (
   chatId?: number,
   username?: string
 ) => {
+  if (error && typeof error === "object") {
+    const errorMessage = error.message || String(error);
+
+    if (errorMessage.includes("bot was blocked by the user") ||
+        errorMessage.includes("user is deactivated") ||
+        errorMessage.includes("chat not found") ||
+        errorMessage.includes("ETELEGRAM: 403 Forbidden")) {
+      console.log(`User-related error (not notifying admin): ${errorMessage} for user ${chatId}`);
+      return;
+    }
+  }
   const contextMessages: { [key: string]: string } = {
     "youtube download": "🎥 Ошибка загрузки YouTube Shorts",
     "youtube video send": "📤 Ошибка отправки YouTube видео",
@@ -95,13 +106,32 @@ export const processSingleVideo = async (
   username?: string
 ) => {
   if (!video.url) {
-    await bot.sendMessage(chatId, "Не удалось получить URL видео.");
+    try {
+      await bot.sendMessage(chatId, "Не удалось получить URL видео.");
+    }
+    catch (error: any) {
+      console.log(`Cannot send message to user ${chatId}:`, error);
+      return;
+    }
     await sendErrorToAdmin(bot, "No video URL", "single video", undefined, chatId, username);
     return;
   }
 
-  const videoBuffer = await downloadBuffer(video.url);
-  await bot.sendVideo(chatId, videoBuffer, { caption: BOT_TAG, disable_notification: true });
+  try {
+    const videoBuffer = await downloadBuffer(video.url);
+    await bot.sendVideo(chatId, videoBuffer, { caption: BOT_TAG, disable_notification: true });
+  }
+  catch (error: any) {
+    const errorMessage = error.message || String(error);
+    if (errorMessage.includes("bot was blocked by the user") ||
+        errorMessage.includes("user is deactivated") ||
+        errorMessage.includes("chat not found") ||
+        errorMessage.includes("ETELEGRAM: 403 Forbidden")) {
+      console.log(`Cannot send video to user ${chatId}: user blocked bot`);
+      return;
+    }
+    await sendErrorToAdmin(bot, error, "single video", undefined, chatId, username);
+  }
 };
 
 export const processSinglePhoto = async (
@@ -111,13 +141,32 @@ export const processSinglePhoto = async (
   username?: string
 ) => {
   if (!photo.url) {
-    await bot.sendMessage(chatId, "Не удалось получить URL фото.");
+    try {
+      await bot.sendMessage(chatId, "Не удалось получить URL фото.");
+    }
+    catch (error: any) {
+      console.log(`Cannot send message to user ${chatId}:`, error);
+      return;
+    }
     await sendErrorToAdmin(bot, "No photo URL", "single photo", undefined, chatId, username);
     return;
   }
 
-  const photoBuffer = await downloadBuffer(photo.url);
-  await bot.sendPhoto(chatId, photoBuffer, { caption: BOT_TAG, disable_notification: true });
+  try {
+    const photoBuffer = await downloadBuffer(photo.url);
+    await bot.sendPhoto(chatId, photoBuffer, { caption: BOT_TAG, disable_notification: true });
+  }
+  catch (error: any) {
+    const errorMessage = error.message || String(error);
+    if (errorMessage.includes("bot was blocked by the user") ||
+        errorMessage.includes("user is deactivated") ||
+        errorMessage.includes("chat not found") ||
+        errorMessage.includes("ETELEGRAM: 403 Forbidden")) {
+      console.log(`Cannot send photo to user ${chatId}: user blocked bot`);
+      return;
+    }
+    await sendErrorToAdmin(bot, error, "single photo", undefined, chatId, username);
+  }
 };
 
 export const processMediaGroup = async (
@@ -161,7 +210,15 @@ export const processMediaGroup = async (
         await new Promise(resolve => setTimeout(resolve, 500));
       }
     }
-    catch (error) {
+    catch (error: any) {
+      const errorMessage = error.message || String(error);
+      if (errorMessage.includes("bot was blocked by the user") ||
+          errorMessage.includes("user is deactivated") ||
+          errorMessage.includes("chat not found") ||
+          errorMessage.includes("ETELEGRAM: 403 Forbidden")) {
+        console.log(`Cannot send media group to user ${chatId}: user blocked bot`);
+        return;
+      }
       await sendErrorToAdmin(bot, error, `sendMediaGroup ${mediaType}s`, undefined, chatId, username);
     }
     finally {

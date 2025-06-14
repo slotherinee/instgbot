@@ -81,9 +81,25 @@ bot.onText(/(.+)/, async (msg, match) => {
       await processSocialMedia(bot, chatId, message, username, firstName);
     }
   }
-  catch (error) {
-    await bot.sendMessage(chatId, "Произошла общая ошибка. Попробуйте еще раз.");
-    await sendErrorToAdmin(bot, error, "main function");
+  catch (error: any) {
+    const errorMessage = error && typeof error === "object" ? (error.message || String(error)) : String(error);
+
+    if (errorMessage.includes("bot was blocked by the user") ||
+        errorMessage.includes("user is deactivated") ||
+        errorMessage.includes("chat not found") ||
+        errorMessage.includes("ETELEGRAM: 403 Forbidden")) {
+      console.log(`User ${chatId} has blocked the bot or chat is unavailable`);
+      return;
+    }
+
+    try {
+      await bot.sendMessage(chatId, "Произошла общая ошибка. Попробуйте еще раз.");
+    }
+    catch (sendError) {
+      console.log(`Cannot send error message to user ${chatId}:`, sendError);
+    }
+
+    await sendErrorToAdmin(bot, error, "main function", message, chatId, username);
   }
 });
 

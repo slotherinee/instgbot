@@ -2,7 +2,15 @@ import { Database } from "bun:sqlite";
 
 export const db = new Database("bot_data.sqlite", { create: true });
 
-// Initialize database tables
+try {
+  db.query("SELECT 1").get();
+  console.log("Database connection established successfully");
+}
+catch (error) {
+  console.error("Database connection failed:", error);
+  throw new Error("Cannot connect to database");
+}
+
 db.exec(`
   CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -41,67 +49,117 @@ db.exec(`
   )
 `);
 
-// Create indexes for better performance
 db.exec("CREATE INDEX IF NOT EXISTS idx_users_chat_id ON users (chat_id)");
 db.exec("CREATE INDEX IF NOT EXISTS idx_downloads_user_id ON downloads (user_id)");
 db.exec("CREATE INDEX IF NOT EXISTS idx_errors_user_id ON errors (user_id)");
 
-// Database helper functions
+try {
+  const testQuery = db.query("SELECT name FROM sqlite_master WHERE type='table'").all();
+  console.log("Database tables:", testQuery.map((t: any) => t.name));
+
+  // Test insert/select functionality
+  const testUser = db.query("SELECT COUNT(*) as count FROM users").get() as { count: number };
+  console.log("Database working properly, user count:", testUser.count);
+}
+catch (error) {
+  console.error("Database verification failed:", error);
+  throw new Error("Database setup verification failed");
+}
+
 export const upsertUser = (chatId: number, username?: string, firstName?: string): number => {
   const now = new Date().toISOString();
 
-  // Check if user exists
-  const existingUser = db.query("SELECT id FROM users WHERE chat_id = ?").get(chatId) as { id: number } | undefined;
-  if (existingUser?.id) {
-    // Update existing user
-    db.query(`
-      UPDATE users 
-      SET username = ?, first_name = ?, last_activity = ?
-      WHERE chat_id = ?
-    `).run(username || null, firstName || null, now, chatId);
-    return existingUser.id;
+  try {
+    const existingUser = db.query("SELECT id FROM users WHERE chat_id = ?").get(chatId) as { id: number } | undefined;
+    if (existingUser?.id) {
+      db.query(`
+        UPDATE users 
+        SET username = ?, first_name = ?, last_activity = ?
+        WHERE chat_id = ?
+      `).run(username || null, firstName || null, now, chatId);
+      return existingUser.id;
+    }
+    else {
+      const result = db.query(`
+        INSERT INTO users (username, first_name, chat_id, first_seen, last_activity)
+        VALUES (?, ?, ?, ?, ?)
+      `).run(username || null, firstName || null, chatId, now, now);
+
+      console.log("Database insert result:", result);
+
+      if (!result) {
+        throw new Error("Database insert returned null/undefined result");
+      }
+
+      if (typeof result !== "object") {
+        throw new Error(`Database insert returned unexpected type: ${typeof result}`);
+      }
+
+      if (!("lastInsertRowid" in result)) {
+        throw new Error("Database insert result missing lastInsertRowid property");
+      }
+
+      if (typeof result.lastInsertRowid !== "number" && typeof result.lastInsertRowid !== "bigint") {
+        throw new Error(`Invalid lastInsertRowid type: ${typeof result.lastInsertRowid}, value: ${result.lastInsertRowid}`);
+      }
+
+      return Number(result.lastInsertRowid);
+    }
   }
-  else {
-    // Insert new user
-    const result = db.query(`
-      INSERT INTO users (username, first_name, chat_id, first_seen, last_activity)
-      VALUES (?, ?, ?, ?, ?)
-    `).run(username || null, firstName || null, chatId, now, now);
-    return result.lastInsertRowid as number;
+  catch (error) {
+    console.error("Database error in upsertUser:", error);
+    console.error("Parameters:", { chatId, username, firstName, now });
+    throw error;
   }
 };
 
 export const recordDownload = (chatId: number, url: string, platform: string, mediaType: string, success: boolean, username?: string, firstName?: string) => {
-  const userId = upsertUser(chatId, username, firstName);
-  const now = new Date().toISOString();
+  try {
+    const userId = upsertUser(chatId, username, firstName);
+    const now = new Date().toISOString();
 
-  db.query(`
-    INSERT INTO downloads (user_id, url, platform, media_type, success, timestamp)
-    VALUES (?, ?, ?, ?, ?, ?)
-  `).run(userId, url, platform, mediaType, success, now);
+    db.query(`
+      INSERT INTO downloads (user_id, url, platform, media_type, success, timestamp)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(userId, url, platform, mediaType, success, now);
 
-  // Update user download count if successful
-  if (success) {
-    db.query("UPDATE users SET download_count = download_count + 1 WHERE id = ?").run(userId);
+    if (success) {
+      db.query("UPDATE users SET download_count = download_count + 1 WHERE id = ?").run(userId);
+    }
+  }
+  catch (error) {
+    console.error("Database error in recordDownload:", error);
+    console.error("Parameters:", { chatId, url, platform, mediaType, success, username, firstName });
   }
 };
 
 export const recordError = (chatId: number, errorContext: string, errorMessage: string, originalMessage?: string, username?: string, firstName?: string) => {
-  const userId = upsertUser(chatId, username, firstName);
-  const now = new Date().toISOString();
+  try {
+    const userId = upsertUser(chatId, username, firstName);
+    const now = new Date().toISOString();
 
-  db.query(`
-    INSERT INTO errors (user_id, error_context, error_message, original_message, timestamp)
-    VALUES (?, ?, ?, ?, ?)
-  `).run(userId, errorContext, errorMessage, originalMessage || null, now);
+    db.query(`
+      INSERT INTO errors (user_id, error_context, error_message, original_message, timestamp)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(userId, errorContext, errorMessage, originalMessage || null, now);
 
-  // Update user error count
-  db.query("UPDATE users SET error_count = error_count + 1 WHERE id = ?").run(userId);
+    db.query("UPDATE users SET error_count = error_count + 1 WHERE id = ?").run(userId);
+  }
+  catch (error) {
+    console.error("Database error in recordError:", error);
+    console.error("Parameters:", { chatId, errorContext, errorMessage, originalMessage, username, firstName });
+  }
 };
 
 export const updateUserActivity = (chatId: number) => {
-  const now = new Date().toISOString();
-  db.query("UPDATE users SET last_activity = ? WHERE chat_id = ?").run(now, chatId);
+  try {
+    const now = new Date().toISOString();
+    db.query("UPDATE users SET last_activity = ? WHERE chat_id = ?").run(now, chatId);
+  }
+  catch (error) {
+    console.error("Database error in updateUserActivity:", error);
+    console.error("Parameters:", { chatId });
+  }
 };
 
 export const detectPlatform = (url: string): string => {
