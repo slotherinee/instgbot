@@ -229,7 +229,7 @@ export const processSocialMedia = async (bot: TelegramBot, chatId: number, messa
     if (!download.success) {
       await bot.sendMessage(
         chatId,
-        `Не удалось скачать медиафайл.\nЕсли ошибка возникает многократно, пишите ${ADMIN_USERNAME}`
+        `Не удалось скачать медиафайл.\nУбедитесь, что медиафайл существует и не является приватным.\nЕсли ошибка возникает многократно, пишите ${ADMIN_USERNAME}`
       );
       await sendErrorToAdmin(bot, download, "snapsave download", message, chatId, username);
       recordDownload(chatId, message, platform, "unknown", false, username, firstName);

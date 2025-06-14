@@ -2,8 +2,6 @@ import bot from "./src/index";
 
 async function main () {
   try {
-    console.log("Starting Telegram bot...");
-
     bot.on("polling_error", (error) => {
       console.error("Polling error:", error);
     });
