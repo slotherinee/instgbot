@@ -8,84 +8,7 @@ import {
   recordError,
   splitMessage
 } from "./database";
-import { ADMIN_USER_IDS, isAdmin } from "./utils";
-
-export const sendErrorToAdmin = async (
-  bot: TelegramBot,
-  error: any,
-  context: string,
-  userMessage?: string,
-  chatId?: number,
-  username?: string
-) => {
-  // Record error in database if we have user context
-  if (chatId) {
-    try {
-      const errorMessage = typeof error === "object" && error !== null ?(error.message || JSON.stringify(error)) :String(error);
-      recordError(chatId, context, errorMessage, userMessage, username);
-    }
-    catch (dbError) {
-      console.error("Failed to record error in database:", dbError);
-    }
-  }
-
-  const contextMessages: { [key: string]: string } = {
-    "youtube download": "🎥 Ошибка загрузки YouTube Shorts",
-    "youtube video send": "📤 Ошибка отправки YouTube видео",
-    "youtube mp4 check": "🔍 YouTube не вернул ссылку на видео",
-    "snapsave download": "📱 Ошибка скачивания из соцсетей",
-    "media check": "📁 Не найдены медиафайлы в ответе",
-    "single video": "🎬 Ошибка обработки одного видео",
-    "single photo": "📸 Ошибка обработки одного фото",
-    "sendMediaGroup videos": "🎥📦 Ошибка отправки группы видео",
-    "sendMediaGroup photos": "📸📦 Ошибка отправки группы фото",
-    "delete loading message": "🗑️ Не удалось удалить сообщение 'Загружаю...'",
-    "main message handler": "⚙️ Общая ошибка обработки сообщения",
-    "main function": "🚨 Критическая ошибка бота"
-  };
-
-  const contextTitle = contextMessages[context] || `❌ Ошибка: ${context}`;
-
-  let errorDetails = "";
-  if (typeof error === "object" && error !== null) {
-    if (error.message) {
-      errorDetails = error.message;
-    }
-    else if (error.error) {
-      errorDetails = JSON.stringify(error.error, null, 2);
-    }
-    else {
-      errorDetails = JSON.stringify(error, null, 2);
-    }
-  }
-  else {
-    errorDetails = String(error);
-  }
-
-  const userInfo = chatId ?`🚨 У пользователя ${username ? `@${username}` : `ID: ${chatId}`} произошла ошибка${userMessage ? ` при сообщении "${userMessage}"` : ""}` :"🚨 Системная ошибка бота";
-
-  const errorMessage = [
-    userInfo,
-    "",
-    contextTitle,
-    "",
-    "🔍 Детали ошибки:",
-    errorDetails,
-    "",
-    ...(chatId ? [`👤 Chat ID: ${chatId}`, ""] : []),
-    `⏰ Время: ${new Date().toLocaleString("ru-RU")}`
-  ].join("\n");
-
-  // Send error to all admin users
-  for (const adminId of ADMIN_USER_IDS) {
-    try {
-      await bot.sendMessage(adminId, errorMessage);
-    }
-    catch (e) {
-      console.warn(`Failed to send error to admin ${adminId}:`, e);
-    }
-  }
-};
+import { ADMIN_USER_IDS, isAdmin, safeSendMessage } from "./utils";
 
 // Admin commands handler
 export const handleAdminCommands = async (
@@ -128,7 +51,7 @@ const handleUsersCommand = async (bot: TelegramBot, chatId: number, args: string
     const users = getUsers(limit);
 
     if (users.length === 0) {
-      await bot.sendMessage(chatId, "📭 Пользователей пока нет");
+      await safeSendMessage(bot, chatId, "📭 Пользователей пока нет");
       return;
     }
 
@@ -148,11 +71,11 @@ const handleUsersCommand = async (bot: TelegramBot, chatId: number, args: string
     const chunks = splitMessage(message);
 
     for (const chunk of chunks) {
-      await bot.sendMessage(chatId, chunk);
+      await safeSendMessage(bot, chatId, chunk);
     }
   }
   catch (error) {
-    await bot.sendMessage(chatId, `❌ Ошибка при получении пользователей: ${error}`);
+    await safeSendMessage(bot, chatId, `❌ Ошибка при получении пользователей: ${error}`);
   }
 };
 
@@ -171,10 +94,10 @@ const handleStatsCommand = async (bot: TelegramBot, chatId: number) => {
       `⏰ Обновлено: ${new Date().toLocaleString("ru-RU")}`
     ].join("\n");
 
-    await bot.sendMessage(chatId, message);
+    await safeSendMessage(bot, chatId, message);
   }
   catch (error) {
-    await bot.sendMessage(chatId, `❌ Ошибка при получении статистики: ${error}`);
+    await safeSendMessage(bot, chatId, `❌ Ошибка при получении статистики: ${error}`);
   }
 };
 
@@ -184,7 +107,7 @@ const handleTopUsersCommand = async (bot: TelegramBot, chatId: number, args: str
     const topUsers = getTopUsers(limit);
 
     if (topUsers.length === 0) {
-      await bot.sendMessage(chatId, "📭 Активных пользователей пока нет");
+      await safeSendMessage(bot, chatId, "📭 Активных пользователей пока нет");
       return;
     }
 
@@ -202,11 +125,11 @@ const handleTopUsersCommand = async (bot: TelegramBot, chatId: number, args: str
     const chunks = splitMessage(message);
 
     for (const chunk of chunks) {
-      await bot.sendMessage(chatId, chunk);
+      await safeSendMessage(bot, chatId, chunk);
     }
   }
   catch (error) {
-    await bot.sendMessage(chatId, `❌ Ошибка при получении топа: ${error}`);
+    await safeSendMessage(bot, chatId, `❌ Ошибка при получении топа: ${error}`);
   }
 };
 
@@ -216,7 +139,7 @@ const handleErrorsCommand = async (bot: TelegramBot, chatId: number, args: strin
     const errors = getRecentErrors(limit);
 
     if (errors.length === 0) {
-      await bot.sendMessage(chatId, "✅ Недавних ошибок нет");
+      await safeSendMessage(bot, chatId, "✅ Недавних ошибок нет");
       return;
     }
 
@@ -236,11 +159,11 @@ const handleErrorsCommand = async (bot: TelegramBot, chatId: number, args: strin
     const chunks = splitMessage(message);
 
     for (const chunk of chunks) {
-      await bot.sendMessage(chatId, chunk);
+      await safeSendMessage(bot, chatId, chunk);
     }
   }
   catch (error) {
-    await bot.sendMessage(chatId, `❌ Ошибка при получении ошибок: ${error}`);
+    await safeSendMessage(bot, chatId, `❌ Ошибка при получении ошибок: ${error}`);
   }
 };
 
@@ -249,7 +172,7 @@ const handlePlatformsCommand = async (bot: TelegramBot, chatId: number) => {
     const platforms = getPlatformStats();
 
     if (platforms.length === 0) {
-      await bot.sendMessage(chatId, "📊 Статистика платформ пока пуста");
+      await safeSendMessage(bot, chatId, "📊 Статистика платформ пока пуста");
       return;
     }
 
@@ -265,11 +188,11 @@ const handlePlatformsCommand = async (bot: TelegramBot, chatId: number) => {
     const chunks = splitMessage(message);
 
     for (const chunk of chunks) {
-      await bot.sendMessage(chatId, chunk);
+      await safeSendMessage(bot, chatId, chunk);
     }
   }
   catch (error) {
-    await bot.sendMessage(chatId, `❌ Ошибка при получении статистики платформ: ${error}`);
+    await safeSendMessage(bot, chatId, `❌ Ошибка при получении статистики платформ: ${error}`);
   }
 };
 
@@ -290,5 +213,5 @@ const handleAdminHelpCommand = async (bot: TelegramBot, chatId: number) => {
     "• /errors 3 - последние 3 ошибки"
   ].join("\n");
 
-  await bot.sendMessage(chatId, message);
+  await safeSendMessage(bot, chatId, message);
 };

@@ -1,7 +1,7 @@
 import TelegramBot from "node-telegram-bot-api";
 import { snapsave } from "snapsave-media-downloader";
 import { youtube } from "btch-downloader";
-import { closeDatabase, detectPlatform, recordDownload } from "./database";
+import { closeDatabase, detectPlatform, recordDownload, recordError } from "./database";
 
 export const BOT_TAG = "@instg_save_bot";
 export const ADMIN_USERNAME = Bun.env.ADMIN_USERNAME!;
@@ -18,6 +18,133 @@ export class FileTooLargeError extends Error {
     this.name = "FileTooLargeError";
   }
 }
+
+// Функция для безопасной отправки сообщений с обработкой блокировки
+export const safeSendMessage = async (
+  bot: TelegramBot,
+  chatId: number,
+  text: string,
+  options?: TelegramBot.SendMessageOptions
+): Promise<TelegramBot.Message | null> => {
+  try {
+    return await bot.sendMessage(chatId, text, options);
+  }
+  catch (error: any) {
+    const errorMessage = error && typeof error === "object" ? (error.message || String(error)) : String(error);
+
+    if (errorMessage.includes("bot was blocked by the user") ||
+        errorMessage.includes("user is deactivated") ||
+        errorMessage.includes("chat not found") ||
+        errorMessage.includes("ETELEGRAM: 403 Forbidden")) {
+      console.log(`User ${chatId} has blocked the bot or chat is unavailable`);
+      return null;
+    }
+
+    // Если это не ошибка блокировки, пробрасываем дальше
+    throw error;
+  }
+};
+
+// Функция для безопасной отправки видео
+export const safeSendVideo = async (
+  bot: TelegramBot,
+  chatId: number,
+  video: string | Buffer,
+  options?: TelegramBot.SendVideoOptions
+): Promise<TelegramBot.Message | null> => {
+  try {
+    return await bot.sendVideo(chatId, video, options);
+  }
+  catch (error: any) {
+    const errorMessage = error && typeof error === "object" ? (error.message || String(error)) : String(error);
+
+    if (errorMessage.includes("bot was blocked by the user") ||
+        errorMessage.includes("user is deactivated") ||
+        errorMessage.includes("chat not found") ||
+        errorMessage.includes("ETELEGRAM: 403 Forbidden")) {
+      console.log(`User ${chatId} has blocked the bot or chat is unavailable`);
+      return null;
+    }
+
+    throw error;
+  }
+};
+
+// Функция для безопасной отправки фото
+export const safeSendPhoto = async (
+  bot: TelegramBot,
+  chatId: number,
+  photo: string | Buffer,
+  options?: TelegramBot.SendPhotoOptions
+): Promise<TelegramBot.Message | null> => {
+  try {
+    return await bot.sendPhoto(chatId, photo, options);
+  }
+  catch (error: any) {
+    const errorMessage = error && typeof error === "object" ? (error.message || String(error)) : String(error);
+
+    if (errorMessage.includes("bot was blocked by the user") ||
+        errorMessage.includes("user is deactivated") ||
+        errorMessage.includes("chat not found") ||
+        errorMessage.includes("ETELEGRAM: 403 Forbidden")) {
+      console.log(`User ${chatId} has blocked the bot or chat is unavailable`);
+      return null;
+    }
+
+    throw error;
+  }
+};
+
+// Функция для безопасной отправки медиа группы
+export const safeSendMediaGroup = async (
+  bot: TelegramBot,
+  chatId: number,
+  media: TelegramBot.InputMedia[],
+  options?: TelegramBot.SendMediaGroupOptions
+): Promise<TelegramBot.Message[] | null> => {
+  try {
+    return await bot.sendMediaGroup(chatId, media, options);
+  }
+  catch (error: any) {
+    const errorMessage = error && typeof error === "object" ? (error.message || String(error)) : String(error);
+
+    if (errorMessage.includes("bot was blocked by the user") ||
+        errorMessage.includes("user is deactivated") ||
+        errorMessage.includes("chat not found") ||
+        errorMessage.includes("ETELEGRAM: 403 Forbidden")) {
+      console.log(`User ${chatId} has blocked the bot or chat is unavailable`);
+      return null;
+    }
+
+    throw error;
+  }
+};
+
+// Функция для безопасного удаления сообщения
+export const safeDeleteMessage = async (
+  bot: TelegramBot,
+  chatId: number,
+  messageId: number
+): Promise<boolean> => {
+  try {
+    return await bot.deleteMessage(chatId, messageId);
+  }
+  catch (error: any) {
+    const errorMessage = error && typeof error === "object" ? (error.message || String(error)) : String(error);
+
+    if (errorMessage.includes("bot was blocked by the user") ||
+        errorMessage.includes("user is deactivated") ||
+        errorMessage.includes("chat not found") ||
+        errorMessage.includes("ETELEGRAM: 403 Forbidden")) {
+      console.log(`User ${chatId} has blocked the bot or chat is unavailable`);
+      return false;
+    }
+
+    // Игнорируем ошибки удаления сообщений (сообщение уже удалено, слишком старое и т.д.)
+    console.log(`Could not delete message for user ${chatId}:`, errorMessage);
+    return false;
+  }
+};
 
 export const downloadBuffer = async (url: string): Promise<Buffer> => {
   const response = await fetch(url);
@@ -53,6 +180,17 @@ export const sendErrorToAdmin = async (
   chatId?: number,
   username?: string
 ) => {
+  // Record error in database if we have user context
+  if (chatId) {
+    try {
+      const errorMessage = typeof error === "object" && error !== null ? (error.message || JSON.stringify(error)) : String(error);
+      recordError(chatId, context, errorMessage, userMessage, username);
+    }
+    catch (dbError) {
+      console.error("Failed to record error in database:", dbError);
+    }
+  }
+
   if (error && typeof error === "object") {
     const errorMessage = error.message || String(error);
 
@@ -118,7 +256,7 @@ export const sendErrorToAdmin = async (
 
   for (const adminId of ADMIN_USER_IDS) {
     try {
-      await bot.sendMessage(adminId, errorMessage, {
+      await safeSendMessage(bot, adminId, errorMessage, {
         disable_notification: true
       });
     }
@@ -136,11 +274,9 @@ export const processSingleVideo = async (
   loadingMsg?: TelegramBot.Message
 ): Promise<boolean> => {
   if (!video.url) {
-    try {
-      await bot.sendMessage(chatId, "Не удалось получить URL видео.");
-    }
-    catch (error: any) {
-      console.log(`Cannot send message to user ${chatId}:`, error);
+    const result = await safeSendMessage(bot, chatId, "Не удалось получить URL видео.");
+    if (result === null) {
+      console.log(`Cannot send message to user ${chatId}: user blocked bot`);
       return false;
     }
     await sendErrorToAdmin(bot, "No video URL", "single video", undefined, chatId, username);
@@ -149,15 +285,15 @@ export const processSingleVideo = async (
 
   try {
     const videoBuffer = await downloadBuffer(video.url);
-    await bot.sendVideo(chatId, videoBuffer, { caption: BOT_TAG, disable_notification: true });
+    await safeSendVideo(bot, chatId, videoBuffer, { caption: BOT_TAG, disable_notification: true });
     return false;
   }
   catch (error: any) {
     if (error instanceof FileTooLargeError) {
       if (loadingMsg) {
-        await bot.deleteMessage(chatId, loadingMsg.message_id).catch(() => {});
+        await safeDeleteMessage(bot, chatId, loadingMsg.message_id);
       }
-      await bot.sendMessage(chatId, "Слишком большой файл для загрузки. Максимальный размер: 50MB.");
+      await safeSendMessage(bot, chatId, "Слишком большой файл для загрузки. Максимальный размер: 50MB.");
       return true;
     }
 
@@ -182,11 +318,9 @@ export const processSinglePhoto = async (
   loadingMsg?: TelegramBot.Message
 ): Promise<boolean> => {
   if (!photo.url) {
-    try {
-      await bot.sendMessage(chatId, "Не удалось получить URL фото.");
-    }
-    catch (error: any) {
-      console.log(`Cannot send message to user ${chatId}:`, error);
+    const result = await safeSendMessage(bot, chatId, "Не удалось получить URL фото.");
+    if (result === null) {
+      console.log(`Cannot send message to user ${chatId}: user blocked bot`);
       return false;
     }
     await sendErrorToAdmin(bot, "No photo URL", "single photo", undefined, chatId, username);
@@ -195,15 +329,15 @@ export const processSinglePhoto = async (
 
   try {
     const photoBuffer = await downloadBuffer(photo.url);
-    await bot.sendPhoto(chatId, photoBuffer, { caption: BOT_TAG, disable_notification: true });
-    return false;
+    await safeSendPhoto(bot, chatId, photoBuffer, { caption: BOT_TAG, disable_notification: true });
+    return true;
   }
   catch (error: any) {
     if (error instanceof FileTooLargeError) {
       if (loadingMsg) {
-        await bot.deleteMessage(chatId, loadingMsg.message_id).catch(() => {});
+        await safeDeleteMessage(bot, chatId, loadingMsg.message_id);
       }
-      await bot.sendMessage(chatId, "Слишком большой файл для загрузки. Максимальный размер: 50MB.");
+      await safeSendMessage(bot, chatId, "Слишком большой файл для загрузки. Максимальный размер: 50MB.");
       return true;
     }
 
@@ -254,7 +388,7 @@ export const processMediaGroup = async (
         caption: index === 0 ? BOT_TAG : undefined
       }));
 
-      await bot.sendMediaGroup(chatId, telegramMedia, {
+      await safeSendMediaGroup(bot, chatId, telegramMedia, {
         disable_notification: true
       });
 
@@ -265,9 +399,9 @@ export const processMediaGroup = async (
     catch (error: any) {
       if (error instanceof FileTooLargeError) {
         if (loadingMsg) {
-          await bot.deleteMessage(chatId, loadingMsg.message_id).catch(() => {});
+          await safeDeleteMessage(bot, chatId, loadingMsg.message_id);
         }
-        await bot.sendMessage(chatId, "Один или несколько файлов слишком большие для загрузки. Максимальный размер: 50MB.");
+        await safeSendMessage(bot, chatId, "Один или несколько файлов слишком большие для загрузки. Максимальный размер: 50MB.");
         return true;
       }
 
@@ -296,44 +430,49 @@ export const processYouTubeShorts = async (bot: TelegramBot, chatId: number, mes
     const response = await youtube(message);
 
     if (response && response.mp4) {
-      const loadingMsg = await bot.sendMessage(chatId, "Загружаю...", {
+      const loadingMsg = await safeSendMessage(bot, chatId, "Загружаю...", {
         disable_notification: true
       });
+
+      if (loadingMsg === null) {
+        console.log(`User ${chatId} has blocked the bot`);
+        return;
+      }
 
       try {
         const videoBuffer = await downloadBuffer(response.mp4);
 
-        await bot.sendVideo(chatId, videoBuffer, {
+        await safeSendVideo(bot, chatId, videoBuffer, {
           caption: BOT_TAG,
           disable_notification: true
         });
 
-        await bot.deleteMessage(chatId, loadingMsg.message_id).catch(() => {});
+        await safeDeleteMessage(bot, chatId, loadingMsg.message_id);
 
         recordDownload(chatId, message, platform, "video", true, username, firstName);
       }
       catch (sendError: any) {
         if (sendError instanceof FileTooLargeError) {
-          await bot.deleteMessage(chatId, loadingMsg.message_id).catch(() => {});
-          await bot.sendMessage(chatId, "Видео слишком большое для загрузки. Максимальный размер: 50MB.");
+          await safeDeleteMessage(bot, chatId, loadingMsg.message_id);
+          await safeSendMessage(bot, chatId, "Видео слишком большое для загрузки. Максимальный размер: 50MB.");
           recordDownload(chatId, message, platform, "video", false, username, firstName);
           return;
         }
 
-        await bot.deleteMessage(chatId, loadingMsg.message_id).catch(() => {});
-        await bot.sendMessage(chatId, "Не удалось отправить видео с YouTube Shorts.");
+        await safeDeleteMessage(bot, chatId, loadingMsg.message_id);
+        await safeSendMessage(bot, chatId, "Не удалось отправить видео с YouTube Shorts.");
         await sendErrorToAdmin(bot, sendError, "youtube video send", message, chatId, username);
         recordDownload(chatId, message, platform, "video", false, username, firstName);
       }
     }
     else {
-      await bot.sendMessage(chatId, "Не удалось получить видео с YouTube Shorts.");
+      await safeSendMessage(bot, chatId, "Не удалось получить видео с YouTube Shorts.");
       await sendErrorToAdmin(bot, "No mp4 URL in YouTube response", "youtube mp4 check", message, chatId, username);
       recordDownload(chatId, message, platform, "video", false, username, firstName);
     }
   }
   catch (error) {
-    await bot.sendMessage(chatId, "Не удалось скачать видео с YouTube Shorts. Попробуйте еще раз.");
+    await safeSendMessage(bot, chatId, "Не удалось скачать видео с YouTube Shorts. Попробуйте еще раз.");
     await sendErrorToAdmin(bot, error, "youtube download", message, chatId, username);
     recordDownload(chatId, message, platform, "video", false, username, firstName);
   }
@@ -354,7 +493,8 @@ export const processSocialMedia = async (bot: TelegramBot, chatId: number, messa
     const download = await snapsave(formattedMessage);
 
     if (!download.success) {
-      await bot.sendMessage(
+      await safeSendMessage(
+        bot,
         chatId,
         `Не удалось скачать медиафайл.\nУбедитесь, что медиафайл существует и не является приватным.\nЕсли ошибка возникает многократно, пишите ${ADMIN_USERNAME}`
       );
@@ -365,7 +505,7 @@ export const processSocialMedia = async (bot: TelegramBot, chatId: number, messa
 
     const media = download.data?.media;
     if (!media) {
-      await bot.sendMessage(chatId, "Не удалось скачать медиа. Попробуйте еще раз.");
+      await safeSendMessage(bot, chatId, "Не удалось скачать медиа. Попробуйте еще раз.");
       await sendErrorToAdmin(bot, "No media in response", "media check", message, chatId, username);
       recordDownload(chatId, message, platform, "unknown", false, username, firstName);
       return;
@@ -373,9 +513,14 @@ export const processSocialMedia = async (bot: TelegramBot, chatId: number, messa
 
     const videos = media.filter((m) => m.type === "video");
     const photos = media.filter((m) => m.type === "image");
-    const loadingMsg = await bot.sendMessage(chatId, "Загружаю...", {
+    const loadingMsg = await safeSendMessage(bot, chatId, "Загружаю...", {
       disable_notification: true
     });
+
+    if (loadingMsg === null) {
+      console.log(`User ${chatId} has blocked the bot`);
+      return;
+    }
 
     let hasSuccessfulDownload = false;
     let loadingMsgHandled = false;
@@ -405,14 +550,12 @@ export const processSocialMedia = async (bot: TelegramBot, chatId: number, messa
         recordDownload(chatId, message, platform, videos.length > 0 ? "video" : "photo", true, username, firstName);
 
         if (!loadingMsgHandled) {
-          await bot.deleteMessage(chatId, loadingMsg.message_id).catch(async (error) => {
-            await sendErrorToAdmin(bot, error, "delete loading message", message, chatId, username);
-          });
+          await safeDeleteMessage(bot, chatId, loadingMsg.message_id);
         }
       }
       else {
         if (!loadingMsgHandled) {
-          await bot.deleteMessage(chatId, loadingMsg.message_id).catch(() => {});
+          await safeDeleteMessage(bot, chatId, loadingMsg.message_id);
         }
       }
 
@@ -420,22 +563,22 @@ export const processSocialMedia = async (bot: TelegramBot, chatId: number, messa
     catch (error: any) {
       if (error instanceof FileTooLargeError) {
         if (!loadingMsgHandled) {
-          await bot.deleteMessage(chatId, loadingMsg.message_id).catch(() => {});
+          await safeDeleteMessage(bot, chatId, loadingMsg.message_id);
         }
-        await bot.sendMessage(chatId, "Файл слишком большой для загрузки. Максимальный размер: 50MB.");
+        await safeSendMessage(bot, chatId, "Файл слишком большой для загрузки. Максимальный размер: 50MB.");
         recordDownload(chatId, message, platform, "unknown", false, username, firstName);
         return;
       }
 
       if (!loadingMsgHandled) {
-        await bot.deleteMessage(chatId, loadingMsg.message_id).catch(() => {});
+        await safeDeleteMessage(bot, chatId, loadingMsg.message_id);
       }
       recordDownload(chatId, message, platform, "unknown", false, username, firstName);
       await sendErrorToAdmin(bot, error, "main message handler", message, chatId, username);
     }
   }
   catch (error) {
-    await bot.sendMessage(chatId, "Произошла ошибка при обработке запроса.");
+    await safeSendMessage(bot, chatId, "Произошла ошибка при обработке запроса.");
     await sendErrorToAdmin(bot, error, "snapsave download", message, chatId, username);
     recordDownload(chatId, message, platform, "unknown", false, username, firstName);
   }

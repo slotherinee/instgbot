@@ -5,7 +5,6 @@ async function main () {
     bot.on("polling_error", (error) => {
       console.error("Polling error:", error);
     });
-
   }
   catch (error) {
     console.error("Failed to start bot:", error);

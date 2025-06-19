@@ -11,6 +11,7 @@ import {
   isYoutubeShortsLink,
   processSocialMedia,
   processYouTubeShorts,
+  safeSendMessage,
   sendErrorToAdmin,
   shutdown
 } from "./utils";
@@ -21,7 +22,8 @@ const bot = new TelegramBot(token, { polling: true });
 
 bot.onText(/\/start/, async (msg) => {
   const chatId = msg.chat.id;
-  await bot.sendMessage(
+  await safeSendMessage(
+    bot,
     chatId,
     [
       "Привет! 👋",
@@ -53,7 +55,7 @@ bot.onText(/(.+)/, async (msg, match) => {
   }
 
   if (message && message === "/help") {
-    await bot.sendMessage(chatId, helpMessage);
+    await safeSendMessage(bot, chatId, helpMessage);
     return;
   }
 
@@ -63,7 +65,7 @@ bot.onText(/(.+)/, async (msg, match) => {
   const isAdminCommand = isAdmin(userId) && message && message.startsWith("/");
 
   if (!isValidUrl && !isAdminCommand) {
-    await bot.sendMessage(chatId, helpMessage);
+    await safeSendMessage(bot, chatId, helpMessage);
     return;
   }
 
