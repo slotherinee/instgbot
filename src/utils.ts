@@ -36,7 +36,6 @@ export const safeSendMessage = async (
         errorMessage.includes("user is deactivated") ||
         errorMessage.includes("chat not found") ||
         errorMessage.includes("ETELEGRAM: 403 Forbidden")) {
-      console.log(`User ${chatId} has blocked the bot or chat is unavailable`);
       return null;
     }
 
@@ -62,7 +61,7 @@ export const safeSendVideo = async (
         errorMessage.includes("user is deactivated") ||
         errorMessage.includes("chat not found") ||
         errorMessage.includes("ETELEGRAM: 403 Forbidden")) {
-      console.log(`User ${chatId} has blocked the bot or chat is unavailable`);
+
       return null;
     }
 
@@ -87,7 +86,7 @@ export const safeSendPhoto = async (
         errorMessage.includes("user is deactivated") ||
         errorMessage.includes("chat not found") ||
         errorMessage.includes("ETELEGRAM: 403 Forbidden")) {
-      console.log(`User ${chatId} has blocked the bot or chat is unavailable`);
+
       return null;
     }
 
@@ -112,7 +111,7 @@ export const safeSendMediaGroup = async (
         errorMessage.includes("user is deactivated") ||
         errorMessage.includes("chat not found") ||
         errorMessage.includes("ETELEGRAM: 403 Forbidden")) {
-      console.log(`User ${chatId} has blocked the bot or chat is unavailable`);
+
       return null;
     }
 
@@ -136,12 +135,9 @@ export const safeDeleteMessage = async (
         errorMessage.includes("user is deactivated") ||
         errorMessage.includes("chat not found") ||
         errorMessage.includes("ETELEGRAM: 403 Forbidden")) {
-      console.log(`User ${chatId} has blocked the bot or chat is unavailable`);
+
       return false;
     }
-
-    // Игнорируем ошибки удаления сообщений (сообщение уже удалено, слишком старое и т.д.)
-    console.log(`Could not delete message for user ${chatId}:`, errorMessage);
     return false;
   }
 };
@@ -198,12 +194,10 @@ export const sendErrorToAdmin = async (
         errorMessage.includes("user is deactivated") ||
         errorMessage.includes("chat not found") ||
         errorMessage.includes("ETELEGRAM: 403 Forbidden")) {
-      console.log(`User-related error (not notifying admin): ${errorMessage} for user ${chatId}`);
       return;
     }
 
     if (error instanceof FileTooLargeError) {
-      console.log(`File too large error (not notifying admin): ${errorMessage} for user ${chatId}`);
       return;
     }
   }
@@ -276,7 +270,7 @@ export const processSingleVideo = async (
   if (!video.url) {
     const result = await safeSendMessage(bot, chatId, "Не удалось получить URL видео.");
     if (result === null) {
-      console.log(`Cannot send message to user ${chatId}: user blocked bot`);
+
       return false;
     }
     await sendErrorToAdmin(bot, "No video URL", "single video", undefined, chatId, username);
@@ -302,7 +296,7 @@ export const processSingleVideo = async (
         errorMessage.includes("user is deactivated") ||
         errorMessage.includes("chat not found") ||
         errorMessage.includes("ETELEGRAM: 403 Forbidden")) {
-      console.log(`Cannot send video to user ${chatId}: user blocked bot`);
+
       return false;
     }
     await sendErrorToAdmin(bot, error, "single video", undefined, chatId, username);
@@ -320,7 +314,7 @@ export const processSinglePhoto = async (
   if (!photo.url) {
     const result = await safeSendMessage(bot, chatId, "Не удалось получить URL фото.");
     if (result === null) {
-      console.log(`Cannot send message to user ${chatId}: user blocked bot`);
+
       return false;
     }
     await sendErrorToAdmin(bot, "No photo URL", "single photo", undefined, chatId, username);
@@ -346,7 +340,6 @@ export const processSinglePhoto = async (
         errorMessage.includes("user is deactivated") ||
         errorMessage.includes("chat not found") ||
         errorMessage.includes("ETELEGRAM: 403 Forbidden")) {
-      console.log(`Cannot send photo to user ${chatId}: user blocked bot`);
       return false;
     }
     await sendErrorToAdmin(bot, error, "single photo", undefined, chatId, username);
@@ -410,7 +403,6 @@ export const processMediaGroup = async (
           errorMessage.includes("user is deactivated") ||
           errorMessage.includes("chat not found") ||
           errorMessage.includes("ETELEGRAM: 403 Forbidden")) {
-        console.log(`Cannot send media group to user ${chatId}: user blocked bot`);
         return false;
       }
       await sendErrorToAdmin(bot, error, `sendMediaGroup ${mediaType}s`, undefined, chatId, username);
@@ -435,7 +427,6 @@ export const processYouTubeShorts = async (bot: TelegramBot, chatId: number, mes
       });
 
       if (loadingMsg === null) {
-        console.log(`User ${chatId} has blocked the bot`);
         return;
       }
 
@@ -518,7 +509,6 @@ export const processSocialMedia = async (bot: TelegramBot, chatId: number, messa
     });
 
     if (loadingMsg === null) {
-      console.log(`User ${chatId} has blocked the bot`);
       return;
     }
 

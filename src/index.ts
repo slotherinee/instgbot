@@ -92,7 +92,6 @@ bot.onText(/(.+)/, async (msg, match) => {
         errorMessage.includes("user is deactivated") ||
         errorMessage.includes("chat not found") ||
         errorMessage.includes("ETELEGRAM: 403 Forbidden")) {
-      console.log(`User ${chatId} has blocked the bot or chat is unavailable`);
       return;
     }
 
