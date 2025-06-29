@@ -768,7 +768,7 @@ export const helpMessage = [
   "• TikTok",
   "• Instagram (рилсы, посты, сторис)",
   "• Facebook (видео)",
-  "• Twitter (X) (картинки и видео)",
+  "• Twitter (X) (посты, картинки и видео)",
   "• YouTube Shorts",
   "",
   "Пример: https://www.instagram.com/reel/DKKPO_gyGAg/?igsh=ejVqOTBpNm85OHA0",
