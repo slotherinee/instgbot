@@ -9,6 +9,7 @@ import {
   helpMessage,
   isAdmin,
   isYoutubeShortsLink,
+  processFeatureRequest,
   processNewsletterToggle,
   processSocialMedia,
   processYouTubeShorts,
@@ -62,6 +63,11 @@ bot.onText(/(.+)/, async (msg, match) => {
 
   if (message && message === "/newsletter") {
     await processNewsletterToggle(bot, chatId, username);
+    return;
+  }
+
+  if (message && message.startsWith("/feat")) {
+    await processFeatureRequest(bot, chatId, message, username, firstName);
     return;
   }
 

@@ -193,7 +193,8 @@ export const sendErrorToAdmin = async (
     if (errorMessage.includes("bot was blocked by the user") ||
         errorMessage.includes("user is deactivated") ||
         errorMessage.includes("chat not found") ||
-        errorMessage.includes("ETELEGRAM: 403 Forbidden")) {
+        errorMessage.includes("ETELEGRAM: 403 Forbidden") ||
+        errorMessage.includes("413 Request Entity Too Large")) {
       return;
     }
 
@@ -211,6 +212,7 @@ export const sendErrorToAdmin = async (
     "single photo": "📸 Ошибка обработки одного фото",
     "sendMediaGroup videos": "🎥📦 Ошибка отправки группы видео",
     "sendMediaGroup photos": "📸📦 Ошибка отправки группы фото",
+    "tweet to image": "🐦 Ошибка конвертации твита в изображение",
     "delete loading message": "🗑️ Не удалось удалить сообщение 'Загружаю...'",
     "main message handler": "⚙️ Общая ошибка обработки сообщения",
     "main function": "🚨 Критическая ошибка бота"
@@ -280,13 +282,11 @@ export const processSingleVideo = async (
   try {
     const videoBuffer = await downloadBuffer(video.url);
     await safeSendVideo(bot, chatId, videoBuffer, { caption: BOT_TAG, disable_notification: true });
-    return false;
+
+    return true;
   }
   catch (error: any) {
     if (error instanceof FileTooLargeError) {
-      if (loadingMsg) {
-        await safeDeleteMessage(bot, chatId, loadingMsg.message_id);
-      }
       await safeSendMessage(bot, chatId, "Слишком большой файл для загрузки. Максимальный размер: 50MB.");
       return true;
     }
@@ -324,13 +324,11 @@ export const processSinglePhoto = async (
   try {
     const photoBuffer = await downloadBuffer(photo.url);
     await safeSendPhoto(bot, chatId, photoBuffer, { caption: BOT_TAG, disable_notification: true });
+
     return true;
   }
   catch (error: any) {
     if (error instanceof FileTooLargeError) {
-      if (loadingMsg) {
-        await safeDeleteMessage(bot, chatId, loadingMsg.message_id);
-      }
       await safeSendMessage(bot, chatId, "Слишком большой файл для загрузки. Максимальный размер: 50MB.");
       return true;
     }
@@ -360,9 +358,11 @@ export const processMediaGroup = async (
   );
   if (validMedia.length === 0) return false;
 
+  // Для видео используем меньшие группы (3 видео), для фото больше (10 фото)
+  const groupSize = mediaType === "video" ? 3 : 10;
   const mediaGroups: typeof validMedia[] = [];
-  for (let i = 0; i < validMedia.length; i += 10) {
-    mediaGroups.push(validMedia.slice(i, i + 10));
+  for (let i = 0; i < validMedia.length; i += groupSize) {
+    mediaGroups.push(validMedia.slice(i, i + groupSize));
   }
 
   for (let groupIndex = 0; groupIndex < mediaGroups.length; groupIndex++) {
@@ -370,20 +370,51 @@ export const processMediaGroup = async (
     const mediaBuffers: { buffer: Buffer, index: number }[] = [];
 
     try {
+      // Сначала загружаем все файлы и проверяем общий размер
+      let totalSize = 0;
       for (let i = 0; i < group.length; i++) {
         const buffer = await downloadBuffer(group[i].url);
         mediaBuffers.push({ buffer, index: i });
+        totalSize += buffer.length;
       }
 
-      const telegramMedia = mediaBuffers.map(({ buffer, index }) => ({
-        type: mediaType,
-        media: buffer as any,
-        caption: index === 0 ? BOT_TAG : undefined
-      }));
+      // Если общий размер группы больше 40MB, отправляем по одному
+      const maxGroupSize = 40 * 1024 * 1024; // 40MB
+      if (totalSize > maxGroupSize) {
+        console.log(`Group size ${Math.round(totalSize / 1024 / 1024)}MB exceeds limit, sending individually`);
 
-      await safeSendMediaGroup(bot, chatId, telegramMedia, {
-        disable_notification: true
-      });
+        for (const { buffer, index } of mediaBuffers) {
+          if (mediaType === "video") {
+            await safeSendVideo(bot, chatId, buffer, {
+              caption: index === 0 ? BOT_TAG : undefined,
+              disable_notification: true
+            });
+          }
+          else {
+            await safeSendPhoto(bot, chatId, buffer, {
+              caption: index === 0 ? BOT_TAG : undefined,
+              disable_notification: true
+            });
+          }
+
+          // Небольшая задержка между отправками
+          if (index < mediaBuffers.length - 1) {
+            await new Promise(resolve => setTimeout(resolve, 200));
+          }
+        }
+      }
+      else {
+        // Размер группы приемлемый, отправляем как медиа-группу
+        const telegramMedia = mediaBuffers.map(({ buffer, index }) => ({
+          type: mediaType,
+          media: buffer as any,
+          caption: index === 0 ? BOT_TAG : undefined
+        }));
+
+        await safeSendMediaGroup(bot, chatId, telegramMedia, {
+          disable_notification: true
+        });
+      }
 
       if (groupIndex < mediaGroups.length - 1) {
         await new Promise(resolve => setTimeout(resolve, 500));
@@ -391,20 +422,56 @@ export const processMediaGroup = async (
     }
     catch (error: any) {
       if (error instanceof FileTooLargeError) {
-        if (loadingMsg) {
-          await safeDeleteMessage(bot, chatId, loadingMsg.message_id);
-        }
         await safeSendMessage(bot, chatId, "Один или несколько файлов слишком большие для загрузки. Максимальный размер: 50MB.");
         return true;
       }
 
       const errorMessage = error.message || String(error);
+
+      // Обрабатываем ошибку "слишком большой запрос" от Telegram
+      if (errorMessage.includes("413 Request Entity Too Large")) {
+        // Если группа слишком большая, пробуем отправить файлы по одному
+        console.log(`Media group too large for ${mediaType}, falling back to individual files`);
+
+        for (let i = 0; i < group.length; i++) {
+          try {
+            const buffer = await downloadBuffer(group[i].url);
+
+            if (mediaType === "video") {
+              await safeSendVideo(bot, chatId, buffer, {
+                caption: i === 0 ? BOT_TAG : undefined,
+                disable_notification: true
+              });
+            }
+            else {
+              await safeSendPhoto(bot, chatId, buffer, {
+                caption: i === 0 ? BOT_TAG : undefined,
+                disable_notification: true
+              });
+            }
+
+            // Небольшая задержка между отправками
+            if (i < group.length - 1) {
+              await new Promise(resolve => setTimeout(resolve, 200));
+            }
+          }
+          catch (individualError: any) {
+            console.error(`Failed to send individual ${mediaType} ${i}:`, individualError);
+            // Продолжаем отправку остальных файлов
+          }
+        }
+
+        // Продолжаем с следующей группой
+        continue;
+      }
+
       if (errorMessage.includes("bot was blocked by the user") ||
           errorMessage.includes("user is deactivated") ||
           errorMessage.includes("chat not found") ||
           errorMessage.includes("ETELEGRAM: 403 Forbidden")) {
         return false;
       }
+
       await sendErrorToAdmin(bot, error, `sendMediaGroup ${mediaType}s`, undefined, chatId, username);
       return false;
     }
@@ -412,7 +479,8 @@ export const processMediaGroup = async (
       mediaBuffers.length = 0;
     }
   }
-  return false;
+
+  return true;
 };
 
 export const processYouTubeShorts = async (bot: TelegramBot, chatId: number, message: string, username?: string, firstName?: string) => {
@@ -613,46 +681,46 @@ export const processSocialMedia = async (bot: TelegramBot, chatId: number, messa
     }
 
     let hasSuccessfulDownload = false;
-    let loadingMsgHandled = false;
+    let photoProcessed = false;
+    let videoProcessed = false;
 
     try {
-      if (videos.length === 1) {
-        loadingMsgHandled = await processSingleVideo(bot, chatId, videos[0], username, loadingMsg);
-        hasSuccessfulDownload = !loadingMsgHandled;
+      // Сначала обрабатываем фото
+      if (photos.length === 1) {
+        photoProcessed = await processSinglePhoto(bot, chatId, photos[0], username, loadingMsg);
+        hasSuccessfulDownload = hasSuccessfulDownload || photoProcessed;
       }
-      else if (videos.length > 1) {
-        loadingMsgHandled = await processMediaGroup(bot, chatId, videos, "video", username, loadingMsg);
-        hasSuccessfulDownload = !loadingMsgHandled;
+      else if (photos.length > 1) {
+        photoProcessed = await processMediaGroup(bot, chatId, photos, "photo", username, loadingMsg);
+        hasSuccessfulDownload = hasSuccessfulDownload || photoProcessed;
       }
 
-      if (photos.length === 1 && !loadingMsgHandled) {
-        const photoResult = await processSinglePhoto(bot, chatId, photos[0], username, loadingMsg);
-        loadingMsgHandled = loadingMsgHandled || photoResult;
-        hasSuccessfulDownload = hasSuccessfulDownload || !photoResult;
+      // Затем обрабатываем видео
+      if (videos.length === 1) {
+        videoProcessed = await processSingleVideo(bot, chatId, videos[0], username, loadingMsg);
+        hasSuccessfulDownload = hasSuccessfulDownload || videoProcessed;
       }
-      else if (photos.length > 1 && !loadingMsgHandled) {
-        const photoResult = await processMediaGroup(bot, chatId, photos, "photo", username, loadingMsg);
-        loadingMsgHandled = loadingMsgHandled || photoResult;
-        hasSuccessfulDownload = hasSuccessfulDownload || !photoResult;
+      else if (videos.length > 1) {
+        videoProcessed = await processMediaGroup(bot, chatId, videos, "video", username, loadingMsg);
+        hasSuccessfulDownload = hasSuccessfulDownload || videoProcessed;
+      }
+
+      // Удаляем сообщение "Загружаю..." после обработки всех медиа
+      if (loadingMsg) {
+        await safeDeleteMessage(bot, chatId, loadingMsg.message_id);
       }
 
       if (hasSuccessfulDownload) {
-        recordDownload(chatId, message, platform, videos.length > 0 ? "video" : "photo", true, username, firstName);
-
-        if (!loadingMsgHandled) {
-          await safeDeleteMessage(bot, chatId, loadingMsg.message_id);
-        }
+        recordDownload(chatId, message, platform, photos.length > 0 ? "photo" : "video", true, username, firstName);
       }
       else {
-        if (!loadingMsgHandled) {
-          await safeDeleteMessage(bot, chatId, loadingMsg.message_id);
-        }
+        recordDownload(chatId, message, platform, "unknown", false, username, firstName);
       }
 
     }
     catch (error: any) {
       if (error instanceof FileTooLargeError) {
-        if (!loadingMsgHandled) {
+        if (loadingMsg) {
           await safeDeleteMessage(bot, chatId, loadingMsg.message_id);
         }
         await safeSendMessage(bot, chatId, "Файл слишком большой для загрузки. Максимальный размер: 50MB.");
@@ -660,7 +728,7 @@ export const processSocialMedia = async (bot: TelegramBot, chatId: number, messa
         return;
       }
 
-      if (!loadingMsgHandled) {
+      if (loadingMsg) {
         await safeDeleteMessage(bot, chatId, loadingMsg.message_id);
       }
       recordDownload(chatId, message, platform, "unknown", false, username, firstName);
@@ -706,6 +774,7 @@ export const helpMessage = [
   "Пример: https://www.instagram.com/reel/DKKPO_gyGAg/?igsh=ejVqOTBpNm85OHA0",
   "",
   "📢 /newsletter - управление подпиской на рассылку",
+  "💡 /feat [предложение] - предложить новую функцию",
   "",
   BOT_TAG
 ].join("\n");
@@ -738,5 +807,68 @@ export const processNewsletterToggle = async (bot: TelegramBot, chatId: number, 
   catch (error) {
     console.error("Newsletter toggle error:", error);
     await safeSendMessage(bot, chatId, "Произошла ошибка при изменении настроек рассылки. Попробуйте позже.");
+  }
+};
+
+// Функция для обработки предложений новых функций от пользователей
+export const processFeatureRequest = async (bot: TelegramBot, chatId: number, message: string, username?: string, firstName?: string) => {
+  // Извлекаем текст предложения после команды /feat
+  const featureText = message.replace(/^\/feat\s*/, "").trim();
+
+  if (!featureText) {
+    await safeSendMessage(bot, chatId, [
+      "💡 Расскажите нам о своей идее!",
+      "",
+      "Используйте команду так:",
+      "/feat добавьте поддержку Pinterest",
+      "",
+      "Мы рассмотрим ваше предложение и возможно добавим эту функцию в бот! ✨"
+    ].join("\n"));
+    return;
+  }
+
+  // Формируем сообщение для админов
+  const userInfo = username ? `@${username}` : firstName || `User ID: ${chatId}`;
+  const adminMessage = [
+    "💡 Новое предложение функции!",
+    "",
+    `👤 От пользователя: ${userInfo}`,
+    `🆔 Chat ID: ${chatId}`,
+    "",
+    "📝 Предложение:",
+    featureText,
+    "",
+    `⏰ Время: ${new Date().toLocaleString("ru-RU")}`
+  ].join("\n");
+
+  // Отправляем предложение всем админам
+  let successCount = 0;
+  for (const adminId of ADMIN_USER_IDS) {
+    try {
+      await safeSendMessage(bot, adminId, adminMessage, {
+        disable_notification: true
+      });
+      successCount++;
+    }
+    catch (error) {
+      console.warn(`Failed to send feature request to admin ${adminId}:`, error);
+    }
+  }
+
+  // Подтверждаем пользователю, что предложение отправлено
+  if (successCount > 0) {
+    await safeSendMessage(bot, chatId, [
+      "✅ Спасибо за предложение!",
+      "",
+      "Ваша идея отправлена разработчикам.",
+      "Мы рассмотрим её и, возможно, добавим в будущих обновлениях! 🚀"
+    ].join("\n"));
+  }
+  else {
+    await safeSendMessage(bot, chatId, [
+      "❌ Произошла ошибка при отправке предложения.",
+      "Попробуйте позже или обратитесь к администратору.",
+      ADMIN_USERNAME
+    ].join("\n"));
   }
 };
