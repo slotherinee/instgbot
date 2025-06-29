@@ -9,6 +9,7 @@ import {
   helpMessage,
   isAdmin,
   isYoutubeShortsLink,
+  processNewsletterToggle,
   processSocialMedia,
   processYouTubeShorts,
   safeSendMessage,
@@ -56,6 +57,11 @@ bot.onText(/(.+)/, async (msg, match) => {
 
   if (message && message === "/help") {
     await safeSendMessage(bot, chatId, helpMessage);
+    return;
+  }
+
+  if (message && message === "/newsletter") {
+    await processNewsletterToggle(bot, chatId, username);
     return;
   }
 

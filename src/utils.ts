@@ -1,7 +1,7 @@
 import TelegramBot from "node-telegram-bot-api";
 import { snapsave } from "snapsave-media-downloader";
 import { youtube } from "btch-downloader";
-import { closeDatabase, detectPlatform, recordDownload, recordError } from "./database";
+import { closeDatabase, detectPlatform, getAllUsers, getNewsletterStats, getNewsletterStatus, recordDownload, recordError, toggleNewsletterSubscription } from "./database";
 
 export const BOT_TAG = "@instg_save_bot";
 export const ADMIN_USERNAME = Bun.env.ADMIN_USERNAME!;
@@ -476,6 +476,66 @@ const handleUnderlineEnding = (text: string): string => {
   return text;
 };
 
+const convertTweetToImage = async (tweetUrl: string): Promise<Buffer | null> => {
+  try {
+    const tweetId = tweetUrl.split("/").pop()?.split("?")[0];
+    if (!tweetId) {
+      throw new Error("Could not extract tweet ID from URL");
+    }
+
+    const payload = JSON.stringify({
+      hideFooter: true,
+      hideThread: true,
+      hideTwitterLinks: true,
+      id: tweetId,
+      lang: "en",
+      theme: "light",
+      timeZone: "Europe/Moscow",
+      transparency: 1
+    });
+
+    const response = await fetch("https://10015.io/api/capture-tweet", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36",
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7,la;q=0.6",
+        "Accept-Encoding": "gzip, deflate, br, zstd",
+        "Origin": "https://10015.io",
+        "Referer": "https://10015.io/tools/tweet-to-image-converter",
+        "sec-ch-ua": "\"Google Chrome\";v=\"137\", \"Chromium\";v=\"137\", \"Not/A)Brand\";v=\"24\"",
+        "sec-ch-ua-mobile": "?0",
+        "sec-ch-ua-platform": "\"macOS\"",
+        "Sec-Fetch-Dest": "empty",
+        "Sec-Fetch-Mode": "cors",
+        "Sec-Fetch-Site": "same-origin",
+        "Cookie": "__Host-next-auth.csrf-token=33bd2f4f87c0f4593d4ce789f67138cb4975a2092947dd5f9d759e25ea091337%7C8030837b5405e99a1542f58b221e27cb959e4f439f4e6c1738a5bc550d4d9bcb; __Secure-next-auth.callback-url=https%3A%2F%2F10015.io",
+        "t": "U2FsdGVkX1+WeNE9r58+OejlEIkvsLINvrBPIqjivHdpQl5KFrB2xP61+dA+QA9w2e9D2EkIS3fyrpXhaWTYzpYfpghqMcr9+kxnZNgLlw/C3QzY9DQ3PW97q5zdM9wIQCtAS6Q0yarPr4cd2ywW1g=="
+      },
+      body: payload
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+
+    const data = await response.json();
+
+    if (data.image) {
+      const imageData = data.image.replace(/^data:image\/\w+;base64,/, "");
+      const buffer = Buffer.from(imageData, "base64");
+      return buffer;
+    }
+
+    return null;
+  }
+  catch (error) {
+    console.error("Tweet to image conversion error:", error);
+    return null;
+  }
+};
+
 export const processSocialMedia = async (bot: TelegramBot, chatId: number, message: string, username?: string, firstName?: string) => {
   const platform = detectPlatform(message);
 
@@ -484,6 +544,46 @@ export const processSocialMedia = async (bot: TelegramBot, chatId: number, messa
     const download = await snapsave(formattedMessage);
 
     if (!download.success) {
+      // Если это Twitter/X и snapsave не сработал, пробуем конвертировать в изображение
+      if (platform === "twitter" || platform === "x") {
+        const loadingMsg = await safeSendMessage(bot, chatId, "Загружаю...", {
+          disable_notification: true
+        });
+
+        if (loadingMsg === null) {
+          return;
+        }
+
+        try {
+          const imageBuffer = await convertTweetToImage(message);
+
+          if (imageBuffer) {
+            await safeSendPhoto(bot, chatId, imageBuffer, {
+              caption: BOT_TAG,
+              disable_notification: true
+            });
+
+            await safeDeleteMessage(bot, chatId, loadingMsg.message_id);
+            recordDownload(chatId, message, platform, "image", true, username, firstName);
+            return;
+          }
+          else {
+            await safeDeleteMessage(bot, chatId, loadingMsg.message_id);
+            await safeSendMessage(bot, chatId, "Не удалось конвертировать твит в изображение.");
+            await sendErrorToAdmin(bot, "Tweet to image conversion failed", "tweet to image", message, chatId, username);
+            recordDownload(chatId, message, platform, "image", false, username, firstName);
+            return;
+          }
+        }
+        catch (error: any) {
+          await safeDeleteMessage(bot, chatId, loadingMsg.message_id);
+          await safeSendMessage(bot, chatId, "Ошибка при конвертации твита в изображение.");
+          await sendErrorToAdmin(bot, error, "tweet to image", message, chatId, username);
+          recordDownload(chatId, message, platform, "image", false, username, firstName);
+          return;
+        }
+      }
+
       await safeSendMessage(
         bot,
         chatId,
@@ -605,5 +705,38 @@ export const helpMessage = [
   "",
   "Пример: https://www.instagram.com/reel/DKKPO_gyGAg/?igsh=ejVqOTBpNm85OHA0",
   "",
+  "📢 /newsletter - управление подпиской на рассылку",
+  "",
   BOT_TAG
 ].join("\n");
+
+// Добавляем функцию для обработки команды переключения подписки на рассылку
+export const processNewsletterToggle = async (bot: TelegramBot, chatId: number, username?: string) => {
+  try {
+    const isSubscribed = toggleNewsletterSubscription(chatId);
+
+    const message = isSubscribed ? [
+      "✅ Подписка на рассылку включена!",
+      "",
+      "Теперь вы будете получать:",
+      "• Объявления о новых функциях",
+      "• Важные уведомления от бота",
+      "",
+      "Отключить рассылку: /newsletter"
+    ].join("\n") : [
+      "❌ Подписка на рассылку отключена.",
+      "",
+      "Вы больше не будете получать:",
+      "• Объявления о новых функциях",
+      "• Уведомления от бота",
+      "",
+      "Включить рассылку: /newsletter"
+    ].join("\n");
+
+    await safeSendMessage(bot, chatId, message);
+  }
+  catch (error) {
+    console.error("Newsletter toggle error:", error);
+    await safeSendMessage(bot, chatId, "Произошла ошибка при изменении настроек рассылки. Попробуйте позже.");
+  }
+};

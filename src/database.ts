@@ -11,7 +11,8 @@ db.exec(`
     first_seen TEXT NOT NULL,
     last_activity TEXT NOT NULL,
     download_count INTEGER DEFAULT 0,
-    error_count INTEGER DEFAULT 0
+    error_count INTEGER DEFAULT 0,
+    newsletter BOOLEAN DEFAULT 1
   )
 `);
 
@@ -43,6 +44,16 @@ db.exec(`
 db.exec("CREATE INDEX IF NOT EXISTS idx_users_chat_id ON users (chat_id)");
 db.exec("CREATE INDEX IF NOT EXISTS idx_downloads_user_id ON downloads (user_id)");
 db.exec("CREATE INDEX IF NOT EXISTS idx_errors_user_id ON errors (user_id)");
+
+// Add newsletter column to existing users if it doesn't exist
+try {
+  db.exec(`
+    ALTER TABLE users ADD COLUMN newsletter BOOLEAN DEFAULT 1
+  `);
+}
+catch (error) {
+  // Column already exists, ignore the error
+}
 
 export const upsertUser = (chatId: number, username?: string, firstName?: string): number => {
   const now = new Date().toISOString();
@@ -208,6 +219,16 @@ export const getPlatformStats = () => {
   `).all() as any[];
 };
 
+// Get all users for announcements (only those who subscribed to newsletter)
+export const getAllUsers = (): Array<{ chat_id: number, username?: string, first_name?: string }> => {
+  return db.prepare(`
+    SELECT chat_id, username, first_name 
+    FROM users 
+    WHERE newsletter = 1
+    ORDER BY last_activity DESC
+  `).all() as Array<{ chat_id: number, username?: string, first_name?: string }>;
+};
+
 // Utility function to split long messages for Telegram
 export const splitMessage = (text: string, maxLength: number = 4096): string[] => {
   if (text.length <= maxLength) {
@@ -240,6 +261,47 @@ export const splitMessage = (text: string, maxLength: number = 4096): string[] =
   }
 
   return chunks;
+};
+
+// Toggle newsletter subscription for user
+export const toggleNewsletterSubscription = (chatId: number): boolean => {
+  const currentStatus = db.prepare(`
+    SELECT newsletter FROM users WHERE chat_id = ?
+  `).get(chatId) as { newsletter: number } | undefined;
+
+  if (!currentStatus) {
+    return false; // User not found
+  }
+
+  const newStatus = currentStatus.newsletter === 1 ? 0 : 1;
+
+  db.prepare(`
+    UPDATE users SET newsletter = ? WHERE chat_id = ?
+  `).run(newStatus, chatId);
+
+  return newStatus === 1;
+};
+
+// Get newsletter subscription status for user
+export const getNewsletterStatus = (chatId: number): boolean => {
+  const result = db.prepare(`
+    SELECT newsletter FROM users WHERE chat_id = ?
+  `).get(chatId) as { newsletter: number } | undefined;
+
+  return result ? result.newsletter === 1 : true; // Default to subscribed if user not found
+};
+
+// Get newsletter subscription statistics
+export const getNewsletterStats = (): { total: number, subscribed: number, unsubscribed: number } => {
+  const result = db.prepare(`
+    SELECT 
+      COUNT(*) as total,
+      SUM(CASE WHEN newsletter = 1 THEN 1 ELSE 0 END) as subscribed,
+      SUM(CASE WHEN newsletter = 0 THEN 1 ELSE 0 END) as unsubscribed
+    FROM users
+  `).get() as { total: number, subscribed: number, unsubscribed: number };
+
+  return result || { total: 0, subscribed: 0, unsubscribed: 0 };
 };
 
 // Graceful shutdown handler
