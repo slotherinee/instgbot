@@ -279,7 +279,6 @@ const handleAnnouncementCommand = async (bot: TelegramBot, chatId: number, messa
   let failureCount = 0;
   const failedUsers: number[] = [];
 
-  // Send announcement to all users
   for (const user of users) {
     try {
       const result = await safeSendMessage(bot, user.chat_id, formattedMessage, {
@@ -294,7 +293,6 @@ const handleAnnouncementCommand = async (bot: TelegramBot, chatId: number, messa
         failedUsers.push(user.chat_id);
       }
 
-      // Small delay to avoid rate limiting
       await new Promise(resolve => setTimeout(resolve, 50));
     }
     catch (error) {

@@ -50,7 +50,7 @@ bot.onText(/(.+)/, async (msg, match) => {
   const userId = msg.from?.id;
   const username = msg.from?.username;
   const firstName = msg.from?.first_name;
-  const message = match?.[1]!;
+  const message = msg.text!;
 
   if (message && message === "/start") {
     return;

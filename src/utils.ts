@@ -39,7 +39,6 @@ export const safeSendMessage = async (
       return null;
     }
 
-    // Если это не ошибка блокировки, пробрасываем дальше
     throw error;
   }
 };
@@ -176,7 +175,6 @@ export const sendErrorToAdmin = async (
   chatId?: number,
   username?: string
 ) => {
-  // Record error in database if we have user context
   if (chatId) {
     try {
       const errorMessage = typeof error === "object" && error !== null ? (error.message || JSON.stringify(error)) : String(error);
@@ -358,7 +356,6 @@ export const processMediaGroup = async (
   );
   if (validMedia.length === 0) return false;
 
-  // Для видео используем меньшие группы (3 видео), для фото больше (10 фото)
   const groupSize = mediaType === "video" ? 3 : 10;
   const mediaGroups: typeof validMedia[] = [];
   for (let i = 0; i < validMedia.length; i += groupSize) {
@@ -370,7 +367,6 @@ export const processMediaGroup = async (
     const mediaBuffers: { buffer: Buffer, index: number }[] = [];
 
     try {
-      // Сначала загружаем все файлы и проверяем общий размер
       let totalSize = 0;
       for (let i = 0; i < group.length; i++) {
         const buffer = await downloadBuffer(group[i].url);
@@ -378,7 +374,6 @@ export const processMediaGroup = async (
         totalSize += buffer.length;
       }
 
-      // Если общий размер группы больше 40MB, отправляем по одному
       const maxGroupSize = 40 * 1024 * 1024; // 40MB
       if (totalSize > maxGroupSize) {
         console.log(`Group size ${Math.round(totalSize / 1024 / 1024)}MB exceeds limit, sending individually`);
@@ -397,14 +392,12 @@ export const processMediaGroup = async (
             });
           }
 
-          // Небольшая задержка между отправками
           if (index < mediaBuffers.length - 1) {
             await new Promise(resolve => setTimeout(resolve, 200));
           }
         }
       }
       else {
-        // Размер группы приемлемый, отправляем как медиа-группу
         const telegramMedia = mediaBuffers.map(({ buffer, index }) => ({
           type: mediaType,
           media: buffer as any,
@@ -428,9 +421,7 @@ export const processMediaGroup = async (
 
       const errorMessage = error.message || String(error);
 
-      // Обрабатываем ошибку "слишком большой запрос" от Telegram
       if (errorMessage.includes("413 Request Entity Too Large")) {
-        // Если группа слишком большая, пробуем отправить файлы по одному
         console.log(`Media group too large for ${mediaType}, falling back to individual files`);
 
         for (let i = 0; i < group.length; i++) {
@@ -450,18 +441,15 @@ export const processMediaGroup = async (
               });
             }
 
-            // Небольшая задержка между отправками
             if (i < group.length - 1) {
               await new Promise(resolve => setTimeout(resolve, 200));
             }
           }
           catch (individualError: any) {
             console.error(`Failed to send individual ${mediaType} ${i}:`, individualError);
-            // Продолжаем отправку остальных файлов
           }
         }
 
-        // Продолжаем с следующей группой
         continue;
       }
 
@@ -779,7 +767,6 @@ export const helpMessage = [
   BOT_TAG
 ].join("\n");
 
-// Добавляем функцию для обработки команды переключения подписки на рассылку
 export const processNewsletterToggle = async (bot: TelegramBot, chatId: number, username?: string) => {
   try {
     const isSubscribed = toggleNewsletterSubscription(chatId);
@@ -810,9 +797,7 @@ export const processNewsletterToggle = async (bot: TelegramBot, chatId: number, 
   }
 };
 
-// Функция для обработки предложений новых функций от пользователей
 export const processFeatureRequest = async (bot: TelegramBot, chatId: number, message: string, username?: string, firstName?: string) => {
-  // Извлекаем текст предложения после команды /feat
   const featureText = message.replace(/^\/feat\s*/, "").trim();
 
   if (!featureText) {
@@ -827,7 +812,6 @@ export const processFeatureRequest = async (bot: TelegramBot, chatId: number, me
     return;
   }
 
-  // Формируем сообщение для админов
   const userInfo = username ? `@${username}` : firstName || `User ID: ${chatId}`;
   const adminMessage = [
     "💡 Новое предложение функции!",
@@ -841,7 +825,6 @@ export const processFeatureRequest = async (bot: TelegramBot, chatId: number, me
     `⏰ Время: ${new Date().toLocaleString("ru-RU")}`
   ].join("\n");
 
-  // Отправляем предложение всем админам
   let successCount = 0;
   for (const adminId of ADMIN_USER_IDS) {
     try {
@@ -855,7 +838,6 @@ export const processFeatureRequest = async (bot: TelegramBot, chatId: number, me
     }
   }
 
-  // Подтверждаем пользователю, что предложение отправлено
   if (successCount > 0) {
     await safeSendMessage(bot, chatId, [
       "✅ Спасибо за предложение!",
