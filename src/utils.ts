@@ -539,52 +539,13 @@ const convertTweetToImage = async (tweetUrl: string): Promise<Buffer | null> => 
       throw new Error("Could not extract tweet ID from URL");
     }
 
-    const payload = JSON.stringify({
-      hideFooter: true,
-      hideThread: true,
-      hideTwitterLinks: true,
-      id: tweetId,
-      lang: "en",
-      theme: "light",
-      timeZone: "Europe/Moscow",
-      transparency: 1
-    });
-
-    const response = await fetch("https://10015.io/api/capture-tweet", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36",
-        "Accept": "application/json, text/plain, */*",
-        "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7,la;q=0.6",
-        "Accept-Encoding": "gzip, deflate, br, zstd",
-        "Origin": "https://10015.io",
-        "Referer": "https://10015.io/tools/tweet-to-image-converter",
-        "sec-ch-ua": "\"Google Chrome\";v=\"137\", \"Chromium\";v=\"137\", \"Not/A)Brand\";v=\"24\"",
-        "sec-ch-ua-mobile": "?0",
-        "sec-ch-ua-platform": "\"macOS\"",
-        "Sec-Fetch-Dest": "empty",
-        "Sec-Fetch-Mode": "cors",
-        "Sec-Fetch-Site": "same-origin",
-        "Cookie": "__Host-next-auth.csrf-token=33bd2f4f87c0f4593d4ce789f67138cb4975a2092947dd5f9d759e25ea091337%7C8030837b5405e99a1542f58b221e27cb959e4f439f4e6c1738a5bc550d4d9bcb; __Secure-next-auth.callback-url=https%3A%2F%2F10015.io",
-        "t": "U2FsdGVkX1+WeNE9r58+OejlEIkvsLINvrBPIqjivHdpQl5KFrB2xP61+dA+QA9w2e9D2EkIS3fyrpXhaWTYzpYfpghqMcr9+kxnZNgLlw/C3QzY9DQ3PW97q5zdM9wIQCtAS6Q0yarPr4cd2ywW1g=="
-      },
-      body: payload
-    });
-
+    const response = await fetch(`https://twtoimage.vercel.app/api/tweet-to-image/${tweetId}`);
+    console.log("response", response);
     if (!response.ok) {
       throw new Error(`HTTP error! status: ${response.status}`);
     }
-
-    const data = await response.json();
-
-    if (data.image) {
-      const imageData = data.image.replace(/^data:image\/\w+;base64,/, "");
-      const buffer = Buffer.from(imageData, "base64");
-      return buffer;
-    }
-
-    return null;
+    const arrayBuffer = await response.arrayBuffer();
+    return Buffer.from(arrayBuffer);
   }
   catch (error) {
     console.error("Tweet to image conversion error:", error);
