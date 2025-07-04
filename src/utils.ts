@@ -1068,7 +1068,7 @@ export const shutdown = async (signal: string, bot: TelegramBot) => {
 
   try {
     await bot.stopPolling();
-    console.log("Bot stopped polling");
+    console.log("Bot stopped polling!");
 
     closeDatabase();
     console.log("Database closed");
