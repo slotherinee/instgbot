@@ -9,6 +9,7 @@ import {
   helpMessage,
   isAdmin,
   isYoutubeShortsLink,
+  notifyAdmins,
   processFeatureRequest,
   processNewsletterToggle,
   processSocialMedia,
@@ -111,8 +112,14 @@ bot.onText(/(.+)/, async (msg, match) => {
   }
 });
 
-process.on("SIGINT", () => shutdown("SIGINT", bot));
-process.on("SIGTERM", () => shutdown("SIGTERM", bot));
+process.on("SIGINT", () => {
+  notifyAdmins(bot, "Bot is shutting down due to SIGINT signal");
+  shutdown("SIGINT", bot);
+});
+process.on("SIGTERM", () => {
+  notifyAdmins(bot, "Bot is shutting down due to SIGTERM signal");
+  shutdown("SIGTERM", bot);
+});
 
 console.log("Bot started successfully!");
 

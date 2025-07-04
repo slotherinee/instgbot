@@ -1052,18 +1052,21 @@ export const processSocialMedia = async (
   }
 };
 
+export const notifyAdmins = async (bot: TelegramBot, message: string) => {
+  for (const adminId of ADMIN_USER_IDS) {
+    try {
+      await safeSendMessage(bot, adminId, message);
+    }
+    catch (error) {
+      console.warn(`Failed to notify admin ${adminId}:`, error);
+    }
+  }
+};
+
 export const shutdown = async (signal: string, bot: TelegramBot) => {
   console.log(`\nReceived ${signal}. Shutting down gracefully...`);
 
   try {
-    await sendErrorToAdmin(
-      bot,
-      "Bot is shutting down",
-      "shutdown",
-      undefined,
-      undefined,
-      undefined
-    );
     await bot.stopPolling();
     console.log("Bot stopped polling");
 
