@@ -112,12 +112,12 @@ bot.onText(/(.+)/, async (msg, match) => {
   }
 });
 
-process.on("SIGINT", () => {
-  notifyAdmins(bot, "Bot is shutting down due to SIGINT signal");
+process.on("SIGINT", async () => {
+  await notifyAdmins(bot, "Bot is shutting down due to SIGINT signal");
   shutdown("SIGINT", bot);
 });
-process.on("SIGTERM", () => {
-  notifyAdmins(bot, "Bot is shutting down due to SIGTERM signal");
+process.on("SIGTERM", async () => {
+  await notifyAdmins(bot, "Bot is shutting down due to SIGTERM signal");
   shutdown("SIGTERM", bot);
 });
 
