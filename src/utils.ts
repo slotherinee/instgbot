@@ -4,13 +4,69 @@ import { youtube } from "btch-downloader";
 import {
   closeDatabase,
   detectPlatform,
-  getAllUsers,
-  getNewsletterStats,
-  getNewsletterStatus,
   recordDownload,
   recordError,
   toggleNewsletterSubscription
 } from "./database";
+
+type UserRateLimit = {
+  requests: number[];
+  lastCleanup: number;
+};
+
+type RateLimitResult = {
+  allowed: boolean;
+  remainingRequests: number;
+  resetTime: number;
+};
+
+const userRateLimits = new Map<number, UserRateLimit>();
+const RATE_LIMIT_REQUESTS = 5; // Максимум запросов
+const RATE_LIMIT_WINDOW = 60 * 1000; // Окно в 1 минуту (мс)
+
+// Функция проверки rate limit
+export const checkRateLimit = (userId: number): RateLimitResult => {
+  const now = Date.now();
+
+  // Получаем или создаем данные пользователя
+  let userLimit = userRateLimits.get(userId);
+  if (!userLimit) {
+    userLimit = { requests: [], lastCleanup: now };
+    userRateLimits.set(userId, userLimit);
+  }
+
+  // Очищаем старые запросы (старше 1 минуты)
+  userLimit.requests = userLimit.requests.filter(timestamp => now - timestamp < RATE_LIMIT_WINDOW);
+
+  if (userLimit.requests.length >= RATE_LIMIT_REQUESTS) {
+    const oldestRequest = Math.min(...userLimit.requests);
+    const resetTime = oldestRequest + RATE_LIMIT_WINDOW;
+    return {
+      allowed: false,
+      remainingRequests: 0,
+      resetTime
+    };
+  }
+
+  userLimit.requests.push(now);
+
+  return {
+    allowed: true,
+    remainingRequests: RATE_LIMIT_REQUESTS - userLimit.requests.length,
+    resetTime: now + RATE_LIMIT_WINDOW
+  };
+};
+
+export const cleanupRateLimitData = () => {
+  const now = Date.now();
+  for (const [userId, userLimit] of userRateLimits.entries()) {
+    if (now - userLimit.lastCleanup > 5 * 60 * 1000) {
+      userRateLimits.delete(userId);
+    }
+  }
+};
+
+setInterval(cleanupRateLimitData, 5 * 60 * 1000);
 
 export const BOT_TAG = "@instg_save_bot";
 export const ADMIN_USERNAME = Bun.env.ADMIN_USERNAME!;
@@ -443,13 +499,34 @@ export const processMediaGroup = async (
 
   for (let groupIndex = 0; groupIndex < mediaGroups.length; groupIndex++) {
     const group = mediaGroups[groupIndex];
-    const mediaBuffers: { buffer: Buffer, index: number }[] = [];
 
     try {
+      // 🚀 ПАРАЛЛЕЛЬНАЯ ЗАГРУЗКА - главное улучшение!
+      const downloadPromises = group.map(async (item, index) => {
+        try {
+          const buffer = await downloadBuffer(item.url);
+          return { buffer, index, success: true };
+        }
+        catch (error) {
+          console.error(`Failed to download item ${index}:`, error);
+          return { buffer: null, index, success: false, error };
+        }
+      });
+
+      // Ожидаем все загрузки одновременно
+      const downloadResults = await Promise.all(downloadPromises);
+
+      // Фильтруем только успешные загрузки
+      const mediaBuffers = downloadResults.filter(result => result.success && result.buffer) as { buffer: Buffer, index: number }[];
+
+      if (mediaBuffers.length === 0) {
+        console.log("No media files were downloaded successfully");
+        continue;
+      }
+
+      // Проверяем общий размер
       let totalSize = 0;
-      for (let i = 0; i < group.length; i++) {
-        const buffer = await downloadBuffer(group[i].url);
-        mediaBuffers.push({ buffer, index: i });
+      for (const { buffer } of mediaBuffers) {
         totalSize += buffer.length;
       }
 
@@ -513,9 +590,10 @@ export const processMediaGroup = async (
           `Media group too large for ${mediaType}, falling back to individual files`
         );
 
-        for (let i = 0; i < group.length; i++) {
+        // Fallback с параллельной загрузкой
+        const fallbackPromises = group.map(async (item, i) => {
           try {
-            const buffer = await downloadBuffer(group[i].url);
+            const buffer = await downloadBuffer(item.url);
 
             if (mediaType === "video") {
               await safeSendVideo(bot, chatId, buffer, {
@@ -540,8 +618,9 @@ export const processMediaGroup = async (
               individualError
             );
           }
-        }
+        });
 
+        await Promise.all(fallbackPromises);
         continue;
       }
 
@@ -563,9 +642,6 @@ export const processMediaGroup = async (
         username
       );
       return false;
-    }
-    finally {
-      mediaBuffers.length = 0;
     }
   }
 
@@ -1093,6 +1169,8 @@ export const helpMessage = [
   "",
   "Пример: https://www.instagram.com/reel/DKKPO_gyGAg/?igsh=ejVqOTBpNm85OHA0",
   "",
+  "⚡ Лимит: 5 запросов в минуту",
+  "",
   "📢 /newsletter - управление подпиской на рассылку",
   "💡 /feat [предложение] - предложить новую функцию",
   "",
@@ -1214,4 +1292,26 @@ export const processFeatureRequest = async (
       ].join("\n")
     );
   }
+};
+
+// Функция для отправки сообщения о превышении лимита
+export const sendRateLimitMessage = async (
+  bot: TelegramBot,
+  chatId: number,
+  resetTime: number
+): Promise<void> => {
+  const resetDate = new Date(resetTime);
+  const now = new Date();
+  const minutesLeft = Math.ceil((resetTime - now.getTime()) / (60 * 1000));
+
+  const message = [
+    "⚠️ Превышен лимит запросов",
+    "",
+    `Вы можете отправлять максимум ${RATE_LIMIT_REQUESTS} запросов в минуту.`,
+    `Попробуйте снова через ${minutesLeft} минут${minutesLeft === 1 ? "у" : minutesLeft < 5 ? "ы" : ""}.`,
+    "",
+    "Это ограничение помогает поддерживать стабильную работу бота для всех пользователей. 🤖"
+  ].join("\n");
+
+  await safeSendMessage(bot, chatId, message);
 };

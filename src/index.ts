@@ -6,6 +6,7 @@ import {
 } from "./database";
 import {
   BOT_TAG,
+  checkRateLimit,
   helpMessage,
   isAdmin,
   isYoutubeShortsLink,
@@ -16,6 +17,7 @@ import {
   processYouTubeShorts,
   safeSendMessage,
   sendErrorToAdmin,
+  sendRateLimitMessage,
   shutdown
 } from "./utils";
 
@@ -89,6 +91,15 @@ bot.onText(/(.+)/, async (msg, match) => {
     if (isAdmin(userId)) {
       const handled = await handleAdminCommands(bot, chatId, message, userId);
       if (handled) return;
+    }
+
+    // 🚦 Проверяем rate limiting для обычных пользователей
+    if (!isAdmin(userId)) {
+      const rateLimitCheck = checkRateLimit(chatId);
+      if (!rateLimitCheck.allowed) {
+        await sendRateLimitMessage(bot, chatId, rateLimitCheck.resetTime);
+        return;
+      }
     }
 
     if (isYoutubeShortsLink(message)) {
