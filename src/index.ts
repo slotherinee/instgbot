@@ -1,19 +1,18 @@
 import TelegramBot from "node-telegram-bot-api";
 import { handleAdminCommands } from "./admin";
-import {
-  updateUserActivity,
-  upsertUser
-} from "./database";
+import { updateUserActivity, upsertUser } from "./database";
 import {
   BOT_TAG,
   checkRateLimit,
   helpMessage,
   isAdmin,
+  isThreadsLink,
   isYoutubeShortsLink,
   notifyAdmins,
   processFeatureRequest,
   processNewsletterToggle,
   processSocialMedia,
+  processThreads,
   processYouTubeShorts,
   safeSendMessage,
   sendErrorToAdmin,
@@ -74,8 +73,11 @@ bot.onText(/(.+)/, async (msg, match) => {
     return;
   }
 
-  const isValidUrl = message && (message.includes("https://") || message.includes("http://")) &&
-                     message.trim() !== "" && message.trim().length >= 10;
+  const isValidUrl =
+    message &&
+    (message.includes("https://") || message.includes("http://")) &&
+    message.trim() !== "" &&
+    message.trim().length >= 10;
 
   const isAdminCommand = isAdmin(userId) && message && message.startsWith("/");
 
@@ -105,21 +107,34 @@ bot.onText(/(.+)/, async (msg, match) => {
     if (isYoutubeShortsLink(message)) {
       await processYouTubeShorts(bot, chatId, message, username, firstName);
     }
+    else if (isThreadsLink(message)) {
+      await processThreads(bot, chatId, message, username, firstName);
+    }
     else {
       await processSocialMedia(bot, chatId, message, username, firstName);
     }
   }
   catch (error: any) {
-    const errorMessage = error && typeof error === "object" ? (error.message || String(error)) : String(error);
+    const errorMessage =
+      error && typeof error === "object"? error.message || String(error): String(error);
 
-    if (errorMessage.includes("bot was blocked by the user") ||
-        errorMessage.includes("user is deactivated") ||
-        errorMessage.includes("chat not found") ||
-        errorMessage.includes("ETELEGRAM: 403 Forbidden")) {
+    if (
+      errorMessage.includes("bot was blocked by the user") ||
+      errorMessage.includes("user is deactivated") ||
+      errorMessage.includes("chat not found") ||
+      errorMessage.includes("ETELEGRAM: 403 Forbidden")
+    ) {
       return;
     }
 
-    await sendErrorToAdmin(bot, error, "main function", message, chatId, username);
+    await sendErrorToAdmin(
+      bot,
+      error,
+      "main function",
+      message,
+      chatId,
+      username
+    );
   }
 });
 

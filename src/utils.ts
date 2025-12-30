@@ -9,6 +9,11 @@ import {
   toggleNewsletterSubscription
 } from "./database";
 
+type ThreadsApiResponse = {
+  image_urls: string[];
+  video_urls: { download_url: string }[];
+};
+
 type UserRateLimit = {
   requests: number[];
   lastCleanup: number;
@@ -36,7 +41,9 @@ export const checkRateLimit = (userId: number): RateLimitResult => {
   }
 
   // Очищаем старые запросы (старше 1 минуты)
-  userLimit.requests = userLimit.requests.filter(timestamp => now - timestamp < RATE_LIMIT_WINDOW);
+  userLimit.requests = userLimit.requests.filter(
+    (timestamp) => now - timestamp < RATE_LIMIT_WINDOW
+  );
 
   if (userLimit.requests.length >= RATE_LIMIT_REQUESTS) {
     const oldestRequest = Math.min(...userLimit.requests);
@@ -243,6 +250,10 @@ export const isYoutubeShortsLink = (url: string): boolean => {
   return (
     url.includes("youtube.com/shorts/") || url.includes("youtu.be/shorts/")
   );
+};
+
+export const isThreadsLink = (url: string): boolean => {
+  return url.includes("threads.com");
 };
 
 export const sendErrorToAdmin = async (
@@ -517,7 +528,9 @@ export const processMediaGroup = async (
       const downloadResults = await Promise.all(downloadPromises);
 
       // Фильтруем только успешные загрузки
-      const mediaBuffers = downloadResults.filter(result => result.success && result.buffer) as { buffer: Buffer, index: number }[];
+      const mediaBuffers = downloadResults.filter(
+        (result) => result.success && result.buffer
+      ) as { buffer: Buffer, index: number }[];
 
       if (mediaBuffers.length === 0) {
         console.log("No media files were downloaded successfully");
@@ -646,6 +659,139 @@ export const processMediaGroup = async (
   }
 
   return true;
+};
+
+const getThreadsDownloadLinks = async (url: string): Promise<ThreadsApiResponse> => {
+  const response = await fetch(`https://api.threadsphotodownloader.com/v2/media?url=${url}`);
+
+  if (!response.ok) {
+    throw new Error(`HTTP error! status: ${response.status}`);
+  }
+
+  const data = await response.json();
+  // Приводим video_urls к нужному формату, если вдруг API вернет массив строк
+  let video_urls: { download_url: string }[] = [];
+  if (Array.isArray(data.video_urls)) {
+    if (data.video_urls.length > 0 && typeof data.video_urls[0] === "string") {
+      video_urls = data.video_urls.map((url: string) => ({ download_url: url }));
+    }
+    else {
+      video_urls = data.video_urls;
+    }
+  }
+  return {
+    image_urls: data.image_urls || [],
+    video_urls
+  };
+};
+
+export const processThreads = async (
+  bot: TelegramBot,
+  chatId: number,
+  message: string,
+  username?: string,
+  firstName?: string
+) => {
+  const platform = detectPlatform(message);
+
+  let loadingMsg: TelegramBot.Message | null = null;
+  let hasSuccessfulDownload = false;
+  try {
+    const response = await getThreadsDownloadLinks(message);
+    const photos: string[] = response.image_urls || [];
+    const videos: string[] = (response.video_urls || []).map(v => v.download_url);
+
+    if (photos.length === 0 && videos.length === 0) {
+      await safeSendMessage(
+        bot,
+        chatId,
+        "Не удалось получить медиафайлы из Threads."
+      );
+      recordDownload(
+        chatId,
+        message,
+        platform,
+        "unknown",
+        false,
+        username,
+        firstName
+      );
+      return;
+    }
+
+    loadingMsg = await safeSendMessage(bot, chatId, "Загружаю...", {
+      disable_notification: true
+    });
+    if (loadingMsg === null) {
+      recordDownload(
+        chatId,
+        message,
+        platform,
+        "unknown",
+        false,
+        username,
+        firstName
+      );
+      return;
+    }
+
+    if (photos.length === 1) {
+      hasSuccessfulDownload = await processSinglePhoto(bot, chatId, { url: photos[0] }, username, loadingMsg) || hasSuccessfulDownload;
+    }
+    else if (photos.length > 1) {
+      const photoItems = photos.map((url) => ({ type: "image", url }));
+      hasSuccessfulDownload = await processMediaGroup(bot, chatId, photoItems, "photo", username, loadingMsg) || hasSuccessfulDownload;
+    }
+
+    if (videos.length === 1) {
+      hasSuccessfulDownload = await processSingleVideo(bot, chatId, { url: videos[0] }, username, loadingMsg) || hasSuccessfulDownload;
+    }
+    else if (videos.length > 1) {
+      const videoItems = videos.map((url) => ({ type: "video", url }));
+      hasSuccessfulDownload = await processMediaGroup(bot, chatId, videoItems, "video", username, loadingMsg) || hasSuccessfulDownload;
+    }
+
+    if (loadingMsg) {
+      await safeDeleteMessage(bot, chatId, loadingMsg.message_id);
+    }
+
+    recordDownload(
+      chatId,
+      message,
+      platform,
+      photos.length > 0 ? "photo" : "video",
+      hasSuccessfulDownload,
+      username,
+      firstName
+    );
+  }
+  catch (error) {
+    if (loadingMsg) {
+      await safeDeleteMessage(bot, chatId, loadingMsg.message_id);
+    }
+    await safeSendMessage(
+      bot,
+      chatId,
+      "Не удалось скачать медиа с Threads. Попробуйте еще раз."
+    );
+    await sendErrorToAdmin(
+      bot,
+      error,
+      "threads download",
+      message,
+      chatId,
+      username
+    );
+    recordDownload(
+      chatId,
+      message,
+      platform,
+      "unknown",
+      false,
+      username,
+      firstName
+    );
+  }
 };
 
 export const processYouTubeShorts = async (
@@ -1308,7 +1454,9 @@ export const sendRateLimitMessage = async (
     "⚠️ Превышен лимит запросов",
     "",
     `Вы можете отправлять максимум ${RATE_LIMIT_REQUESTS} запросов в минуту.`,
-    `Попробуйте снова через ${minutesLeft} минут${minutesLeft === 1 ? "у" : minutesLeft < 5 ? "ы" : ""}.`,
+    `Попробуйте снова через ${minutesLeft} минут${
+      minutesLeft === 1 ? "у" : minutesLeft < 5 ? "ы" : ""
+    }.`,
     "",
     "Это ограничение помогает поддерживать стабильную работу бота для всех пользователей. 🤖"
   ].join("\n");
