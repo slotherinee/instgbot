@@ -279,27 +279,29 @@ const handleAnnouncementCommand = async (bot: TelegramBot, chatId: number, messa
   let failureCount = 0;
   const failedUsers: number[] = [];
 
-  for (const user of users) {
-    try {
-      const result = await safeSendMessage(bot, user.chat_id, formattedMessage, {
-        disable_notification: true
-      });
-
-      if (result !== null) {
-        successCount++;
+  const batchSize = 10;
+  for (let i = 0; i < users.length; i += batchSize) {
+    const batch = users.slice(i, i + batchSize);
+    await Promise.all(batch.map(async (user) => {
+      try {
+        const result = await safeSendMessage(bot, user.chat_id, formattedMessage, {
+          disable_notification: true
+        });
+        if (result !== null) {
+          successCount++;
+        }
+        else {
+          failureCount++;
+          failedUsers.push(user.chat_id);
+        }
       }
-      else {
+      catch (error) {
         failureCount++;
         failedUsers.push(user.chat_id);
+        console.error(`Failed to send announcement to user ${user.chat_id}:`, error);
       }
-
-      await new Promise(resolve => setTimeout(resolve, 50));
-    }
-    catch (error) {
-      failureCount++;
-      failedUsers.push(user.chat_id);
-      console.error(`Failed to send announcement to user ${user.chat_id}:`, error);
-    }
+    }));
+    await new Promise(resolve => setTimeout(resolve, 500));
   }
 
   // Send report to admin

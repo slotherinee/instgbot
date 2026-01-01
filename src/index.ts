@@ -4,6 +4,7 @@ import { updateUserActivity, upsertUser } from "./database";
 import {
   BOT_TAG,
   checkRateLimit,
+  checkTelegramStoriesRateLimit,
   helpMessage,
   isAdmin,
   isThreadsLink,
@@ -19,10 +20,26 @@ import {
   sendRateLimitMessage,
   shutdown
 } from "./utils";
+import { TelegramClient } from "telegram";
+import { StringSession } from "telegram/sessions";
+// @ts-ignore - no types available
+import input from "input";
+import { downloadStories } from "./telegramStories";
 
 const token = Bun.env.TELEGRAM_BOT!;
 Bun.env.NTBA_FIX_350 = "1";
 const bot = new TelegramBot(token, { polling: true });
+
+const apiId = +Bun.env.TELEGRAM_API_ID!;
+const apiHash = Bun.env.TELEGRAM_API_HASH!;
+const stringSession = new StringSession(Bun.env.TELEGRAM_STRING_SESSION!); // first run empty
+
+const userClient = new TelegramClient(
+  stringSession,
+  apiId,
+  apiHash,
+  { connectionRetries: 5 }
+);
 
 bot.onText(/\/start/, async (msg) => {
   const chatId = msg.chat.id;
@@ -35,11 +52,14 @@ bot.onText(/\/start/, async (msg) => {
       "Я бот для скачивания медиа из социальных сетей. ✨",
       "",
       "Я могу:",
-      "— скачивать видео из TikTok ",
-      "— скачивать рилсы, посты и сторис с Instagram",
-      "— скачивать видео из Facebook",
-      "— скачивать посты, видео и изображения из Twitter (X)",
-      "— скачивать YouTube Shorts",
+      "",
+      "• скачивать активные сторис с Telegram (@username)",
+      "• скачивать рилсы, посты и сторис с Instagram",
+      "• скачивать посты, видео и изображения из Twitter (X)",
+      "• скачивать посты из Threads (картинки и видео)",
+      "• скачивать видео из TikTok ",
+      "• скачивать видео из Facebook",
+      "• скачивать YouTube Shorts",
       "",
       BOT_TAG
     ].join("\n")
@@ -81,8 +101,40 @@ bot.onText(/(.+)/, async (msg, match) => {
 
   const isAdminCommand = isAdmin(userId) && message && message.startsWith("/");
 
-  if (!isValidUrl && !isAdminCommand) {
+  const isTelegramUsername =
+    message &&
+    message.startsWith("@") &&
+    /^[\w]{5,32}$/.test(message.slice(1));
+
+  if (!isValidUrl && !isAdminCommand && !isTelegramUsername) {
     await safeSendMessage(bot, chatId, helpMessage);
+    return;
+  }
+
+  if (isTelegramUsername) {
+    const rateLimit = checkTelegramStoriesRateLimit(userId ?? chatId);
+    if (!rateLimit.allowed) {
+      const minutesLeft = Math.ceil((rateLimit.resetTime - Date.now()) / 60000);
+      await safeSendMessage(
+        bot,
+        chatId,
+        `⚡ Лимит: 1 запрос на сторис раз в 3 минуты. Попробуйте снова через ${minutesLeft} мин.`
+      );
+      return;
+    }
+    try {
+      const username = message.slice(1);
+      await downloadStories({
+        userClient,
+        bot,
+        username,
+        chatId
+      });
+    }
+    catch (e) {
+      await bot.sendMessage(chatId, "Не удалось загрузить сторис.");
+      console.error(e);
+    }
     return;
   }
 
@@ -137,6 +189,17 @@ bot.onText(/(.+)/, async (msg, match) => {
     );
   }
 });
+
+(async () => {
+  await userClient.start({
+    phoneNumber: () => input.text("Phone number: "),
+    password: () => input.text("2FA password (if any): "),
+    phoneCode: () => input.text("Code: "),
+    onError: console.log
+  });
+
+  userClient.session.save();
+})();
 
 process.on("SIGINT", async () => {
   await notifyAdmins(bot, "Bot is shutting down due to SIGINT signal");

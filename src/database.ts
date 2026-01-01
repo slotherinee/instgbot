@@ -157,6 +157,7 @@ export const detectPlatform = (url: string): string => {
   if (url.includes("twitter.com") || url.includes("x.com")) return "twitter";
   if (url.includes("youtube.com") || url.includes("youtu.be")) return "youtube";
   if (url.includes("threads.com")) return "threads";
+  if (url.startsWith("@")) return "telegram";
   return "unknown";
 };
 

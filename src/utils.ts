@@ -64,6 +64,23 @@ export const checkRateLimit = (userId: number): RateLimitResult => {
   };
 };
 
+const tgStoriesRateLimits = new Map<number, number>(); // userId -> timestamp последнего запроса
+const TG_STORIES_LIMIT_WINDOW = 3 * 60 * 1000; // 3 минуты
+
+export const checkTelegramStoriesRateLimit = (userId: number): { allowed: boolean, resetTime: number } => {
+  if (isAdmin(userId)) return { allowed: true, resetTime: 0 };
+  const now = Date.now();
+  const lastRequest = tgStoriesRateLimits.get(userId) || 0;
+  if (now - lastRequest < TG_STORIES_LIMIT_WINDOW) {
+    return {
+      allowed: false,
+      resetTime: lastRequest + TG_STORIES_LIMIT_WINDOW
+    };
+  }
+  tgStoriesRateLimits.set(userId, now);
+  return { allowed: true, resetTime: now + TG_STORIES_LIMIT_WINDOW };
+};
+
 export const cleanupRateLimitData = () => {
   const now = Date.now();
   for (const [userId, userLimit] of userRateLimits.entries()) {
@@ -73,7 +90,18 @@ export const cleanupRateLimitData = () => {
   }
 };
 
-setInterval(cleanupRateLimitData, 5 * 60 * 1000);
+export const cleanupTelegramStoriesRateLimit = () => {
+  const now = Date.now();
+  for (const [userId, lastRequest] of tgStoriesRateLimits.entries()) {
+    if (now - lastRequest > TG_STORIES_LIMIT_WINDOW) {
+      tgStoriesRateLimits.delete(userId);
+    }
+  }
+};
+setInterval(() => {
+  cleanupTelegramStoriesRateLimit();
+  cleanupRateLimitData();
+}, 5 * 60 * 1000);
 
 export const BOT_TAG = "@instg_save_bot";
 export const ADMIN_USERNAME = Bun.env.ADMIN_USERNAME!;
@@ -1304,18 +1332,22 @@ export const shutdown = async (signal: string, bot: TelegramBot) => {
 };
 
 export const helpMessage = [
-  "Отправьте ссылку на видео для скачивания.",
+  "Отправьте ссылку на медиа или юзернейм телеграм пользователя для скачивания контента.",
   "",
   "Поддерживаемые платформы:",
-  "• TikTok",
+  "",
+  "• Telegram Stories (@username)",
   "• Instagram (рилсы, посты, сторис)",
-  "• Facebook (видео)",
+  "• Threads (картинки и видео)",
   "• Twitter (X) (посты, картинки и видео)",
+  "• Facebook (видео)",
+  "• TikTok",
   "• YouTube Shorts",
   "",
   "Пример: https://www.instagram.com/reel/DKKPO_gyGAg/?igsh=ejVqOTBpNm85OHA0",
   "",
-  "⚡ Лимит: 5 запросов в минуту",
+  "⚡ Лимит: 5 запросов в минуту на медиа контент по ссылке",
+  "⚡ Телеграм Сторис лимит: 1 запрос раз в 3 минуты",
   "",
   "📢 /newsletter - управление подпиской на рассылку",
   "💡 /feat [предложение] - предложить новую функцию",
