@@ -40,8 +40,19 @@ const ytDlpToDisk = (args: string[], outPath: string): Promise<void> =>
     proc.on("close", code => code === 0 ? resolve() : reject(new Error(`yt-dlp exit ${code}`)));
   });
 
+type FormatInfo = {
+  formatId: string;
+  sizeBytes: number;
+  sizeMB: number;
+  title: string;
+  height: number;
+  width: number;
+  duration: number;
+  thumbnailUrl: string;
+};
+
 // Returns selected format info after yt-dlp applies the format selector
-const getFormatInfo = async (url: string, fmtStr: string): Promise<{ formatId: string, sizeBytes: number, sizeMB: number, title: string, height: number }> => {
+const getFormatInfo = async (url: string, fmtStr: string): Promise<FormatInfo> => {
   const raw = await ytDlp(["--dump-json", "--no-playlist", "--no-cache-dir", "-f", fmtStr, url]);
   const info = JSON.parse(raw);
   const sizeBytes: number = info.filesize ?? 0;
@@ -51,8 +62,22 @@ const getFormatInfo = async (url: string, fmtStr: string): Promise<{ formatId: s
     sizeBytes,
     sizeMB,
     title: info.title ?? "YouTube видео",
-    height: info.height ?? 0
+    height: info.height ?? 0,
+    width: info.width ?? 0,
+    duration: Math.round(info.duration ?? 0),
+    thumbnailUrl: info.thumbnail ?? ""
   };
+};
+
+const fetchThumbnail = async (url: string): Promise<Buffer | null> => {
+  try {
+    const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
+    if (!res.ok) return null;
+    return Buffer.from(await res.arrayBuffer());
+  }
+  catch {
+    return null;
+  }
 };
 
 // Adaptive formats (video+audio separate streams) require ffmpeg to merge.
@@ -156,22 +181,25 @@ export const handleYouTubeCallback = async (
       const isMuxedSmall = fmt.sizeBytes > 0 && fmt.sizeMB <= GRAMMY_LIMIT_MB;
 
       if (isMuxedSmall) {
+        const thumb = fmt.thumbnailUrl ? await fetchThumbnail(fmt.thumbnailUrl) : null;
+        const videoOpts: any = {
+          caption: `${fmt.title}\n\n${BOT_TAG}`,
+          disable_notification: true,
+          supports_streaming: true,
+          ...(fmt.width && { width: fmt.width }),
+          ...(fmt.height && { height: fmt.height }),
+          ...(fmt.duration && { duration: fmt.duration }),
+          ...(thumb && { thumbnail: new InputFile(thumb, "thumb.jpg") })
+        };
+
         const cached = getCachedFileId(cacheKey, cacheType);
         if (cached) {
-          await grammyApi.sendVideo(chatId, cached, {
-            caption: `${fmt.title}\n\n${BOT_TAG}`,
-            disable_notification: true,
-            supports_streaming: true
-          } as any);
+          await grammyApi.sendVideo(chatId, cached, videoOpts);
           return;
         }
         const dlStream = ytDlpStream(["-f", fmt.formatId, "--no-playlist", "-o", "-", url]);
         const rnd = Math.floor(Math.random() * 100000) + 1;
-        const msg = await grammyApi.sendVideo(chatId, new InputFile(dlStream, `video_${rnd}.mp4`), {
-          caption: `${fmt.title}\n\n${BOT_TAG}`,
-          disable_notification: true,
-          supports_streaming: true
-        } as any);
+        const msg = await grammyApi.sendVideo(chatId, new InputFile(dlStream, `video_${rnd}.mp4`), videoOpts);
         setCachedFileId(cacheKey, cacheType, 0, msg.video.file_id);
         return;
       }
@@ -205,12 +233,22 @@ export const handleYouTubeCallback = async (
 
       const tmpPath = `${tmpdir()}/yt_${Date.now()}.mp4`;
       await ytDlpToDisk(["-f", fmt.formatId, "--no-playlist", "--merge-output-format", "mp4", url], tmpPath);
+      const thumb = fmt.thumbnailUrl ? await fetchThumbnail(fmt.thumbnailUrl) : null;
       try {
+        const videoAttrs = fmt.width && fmt.height && fmt.duration? [new Api.DocumentAttributeVideo({
+          w: fmt.width,
+          h: fmt.height,
+          duration: fmt.duration,
+          supportsStreaming: true,
+          roundMessage: false
+        })]: undefined;
         const msg = await client.sendFile(chatId, {
           file: tmpPath,
           caption: `${fmt.title}\n\n${BOT_TAG}`,
           supportsStreaming: true,
-          silent: true
+          silent: true,
+          ...(thumb && { thumb }),
+          ...(videoAttrs && { attributes: videoAttrs })
         }) as Api.Message;
         const doc = (msg?.media as Api.MessageMediaDocument)?.document as Api.Document | undefined;
         if (doc?.id && doc?.accessHash && doc?.fileReference) {
