@@ -9,6 +9,7 @@ import { grammyApi, withChatAction } from "../bot/safe-send";
 import { safeSendMessage } from "../bot/safe-send";
 import { sendErrorToAdmin } from "../bot/errors";
 import { checkYouTubeRateLimit } from "../bot/rate-limit";
+import { isAdmin } from "../config";
 import { getCachedFileId, setCachedFileId } from "../db/queries";
 import { getBotMtproto } from "../bot/mtproto";
 import { Api } from "telegram";
@@ -89,6 +90,7 @@ const videoFmtStr = (quality: number) =>
 type PendingDownload = { url: string };
 
 export const pendingYouTube = new Map<number, PendingDownload>();
+const activeDownloads = new Set<number>();
 
 export const sendYouTubeQualityPicker = async (
   bot: TelegramBot,
@@ -130,6 +132,11 @@ export const handleYouTubeCallback = async (
   userId: number,
   username?: string
 ) => {
+  if (!isAdmin(userId) && activeDownloads.has(userId)) {
+    await safeSendMessage(bot, chatId, "⏳ Дождитесь окончания текущей загрузки.");
+    return;
+  }
+
   const rateLimit = checkYouTubeRateLimit(userId);
   if (!rateLimit.allowed) {
     const sec = Math.ceil((rateLimit.resetTime - Date.now()) / 1000);
@@ -149,6 +156,7 @@ export const handleYouTubeCallback = async (
   const cacheType = type === "a" ? "yt_a_best" : `yt_v_${quality}`;
   const fmtStr = type === "a" ? "bestaudio[ext=m4a]/bestaudio" : videoFmtStr(quality);
 
+  activeDownloads.add(userId);
   try {
     if (type === "a") {
       const cached = getCachedFileId(cacheKey, cacheType);
@@ -265,5 +273,8 @@ export const handleYouTubeCallback = async (
     console.log("YouTube download error:", error);
     await safeSendMessage(bot, chatId, "Не удалось скачать. Попробуйте ещё раз.");
     await sendErrorToAdmin(bot, error, "youtube download", url, chatId, username);
+  }
+  finally {
+    activeDownloads.delete(userId);
   }
 };
