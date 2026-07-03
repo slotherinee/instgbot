@@ -1,11 +1,9 @@
 import { spawn } from "node:child_process";
 import { Readable } from "node:stream";
-import { createWriteStream } from "node:fs";
 import { unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import type TelegramBot from "node-telegram-bot-api";
 import { InputFile } from "grammy";
-import { CustomFile } from "telegram/client/uploads";
 import { BOT_TAG } from "../config";
 import { grammyApi, withChatAction } from "../bot/safe-send";
 import { safeSendMessage } from "../bot/safe-send";
@@ -34,10 +32,13 @@ const ytDlpStream = (args: string[]): Readable => {
   return proc.stdout as unknown as Readable;
 };
 
-const mkfifo = (path: string): Promise<void> =>
-  new Promise((res, rej) =>
-    spawn("mkfifo", [path]).on("close", code => code === 0 ? res() : rej(new Error(`mkfifo exit ${code}`)))
-  );
+// Download to disk (handles both muxed and adaptive+ffmpeg merge)
+const ytDlpToDisk = (args: string[], outPath: string): Promise<void> =>
+  new Promise((resolve, reject) => {
+    const proc = spawn(YT_DLP, [...args, "-o", outPath]);
+    proc.stderr.on("data", () => {});
+    proc.on("close", code => code === 0 ? resolve() : reject(new Error(`yt-dlp exit ${code}`)));
+  });
 
 // Returns selected format info after yt-dlp applies the format selector
 const getFormatInfo = async (url: string, fmtStr: string): Promise<{ formatId: string, sizeBytes: number, sizeMB: number, title: string, height: number }> => {
@@ -53,6 +54,12 @@ const getFormatInfo = async (url: string, fmtStr: string): Promise<{ formatId: s
     height: info.height ?? 0
   };
 };
+
+// Adaptive formats (video+audio separate streams) require ffmpeg to merge.
+// Muxed formats (combined) have exact sizeBytes from YouTube metadata.
+// Format selector: try adaptive first (gives 480p/720p on any IP), fallback to muxed.
+const videoFmtStr = (quality: number) =>
+  `bestvideo[height<=${quality}][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=${quality}]+bestaudio/best[height<=${quality}][ext=mp4]/best[height<=${quality}]`;
 
 type PendingDownload = { url: string };
 
@@ -113,10 +120,9 @@ export const handleYouTubeCallback = async (
 
   pendingYouTube.delete(chatId);
   const { url } = pending;
-
   const cacheKey = url;
   const cacheType = type === "a" ? "yt_a_best" : `yt_v_${quality}`;
-  const fmtStr = type === "a"? "bestaudio[ext=m4a]/bestaudio": `best[height<=${quality}][ext=mp4]/best[height<=${quality}]`;
+  const fmtStr = type === "a" ? "bestaudio[ext=m4a]/bestaudio" : videoFmtStr(quality);
 
   try {
     if (type === "a") {
@@ -137,18 +143,19 @@ export const handleYouTubeCallback = async (
       return;
     }
 
-    // Video — fetch format info first (gets exact formatId, size, title)
+    // Video — fetch format info (resolves adaptive vs muxed, gets exact formatId + size)
     await withChatAction(bot, chatId, "upload_video", async () => {
       const fmt = await getFormatInfo(url, fmtStr);
 
-      // Notify if yt-dlp picked lower quality than requested
       if (fmt.height > 0 && fmt.height < quality) {
         await safeSendMessage(bot, chatId, `ℹ️ ${quality}p недоступно, скачиваю лучшее: ${fmt.height}p`);
       }
 
-      const isLarge = fmt.sizeMB > GRAMMY_LIMIT_MB;
+      // Muxed formats have exact sizeBytes; adaptive formats have sizeBytes=0
+      // Only stream to grammy when format is muxed (sizeBytes>0) and small
+      const isMuxedSmall = fmt.sizeBytes > 0 && fmt.sizeMB <= GRAMMY_LIMIT_MB;
 
-      if (!isLarge) {
+      if (isMuxedSmall) {
         const cached = getCachedFileId(cacheKey, cacheType);
         if (cached) {
           await grammyApi.sendVideo(chatId, cached, {
@@ -169,7 +176,7 @@ export const handleYouTubeCallback = async (
         return;
       }
 
-      // Large file — MTProto
+      // Large or adaptive — download to disk (ffmpeg merges automatically), upload via MTProto
       const client = await getBotMtproto();
 
       const cachedRef = getCachedFileId(cacheKey, cacheType);
@@ -196,9 +203,11 @@ export const handleYouTubeCallback = async (
         }
       }
 
-      const sendAndCache = async (file: any) => {
+      const tmpPath = `${tmpdir()}/yt_${Date.now()}.mp4`;
+      await ytDlpToDisk(["-f", fmt.formatId, "--no-playlist", "--merge-output-format", "mp4", url], tmpPath);
+      try {
         const msg = await client.sendFile(chatId, {
-          file,
+          file: tmpPath,
           caption: `${fmt.title}\n\n${BOT_TAG}`,
           supportsStreaming: true,
           silent: true
@@ -208,38 +217,9 @@ export const handleYouTubeCallback = async (
           const ref = `${doc.id}:${doc.accessHash}:${Buffer.from(doc.fileReference).toString("hex")}`;
           setCachedFileId(cacheKey, cacheType, 0, ref);
         }
-      };
-
-      if (fmt.sizeBytes > 0) {
-        // Stream via named pipe — no disk write
-        const pipePath = `${tmpdir()}/yt_pipe_${Date.now()}`;
-        await mkfifo(pipePath);
-        const dlProc = spawn(YT_DLP, ["-f", fmt.formatId, "--no-playlist", "-o", pipePath, url]);
-        dlProc.stderr.on("data", () => {});
-        try {
-          await sendAndCache(new CustomFile(`${fmt.title}.mp4`, fmt.sizeBytes, pipePath));
-        }
-        finally {
-          dlProc.kill();
-          await unlink(pipePath).catch(() => {});
-        }
       }
-      else {
-        // Fallback: write to disk (size unknown)
-        const tmpPath = `${tmpdir()}/yt_${Date.now()}.mp4`;
-        const dlStream = ytDlpStream(["-f", fmt.formatId, "--no-playlist", "-o", "-", url]);
-        const writer = createWriteStream(tmpPath);
-        await new Promise<void>((res, rej) => {
-          dlStream.pipe(writer);
-          writer.on("finish", res);
-          writer.on("error", rej);
-        });
-        try {
-          await sendAndCache(tmpPath);
-        }
-        finally {
-          await unlink(tmpPath).catch(() => {});
-        }
+      finally {
+        await unlink(tmpPath).catch(() => {});
       }
     });
   }
