@@ -31,9 +31,10 @@ const ytDlpStream = (args: string[]): Readable => {
 
 const ytDlpMergeToDisk = (args: string[], outPath: string): Promise<void> =>
   new Promise((resolve, reject) => {
+    let err = "";
     const proc = spawn(YT_DLP, [...args, "-o", outPath]);
-    proc.stderr.on("data", () => {});
-    proc.on("close", code => code === 0 ? resolve() : reject(new Error(`yt-dlp exit ${code}`)));
+    proc.stderr.on("data", (d: Buffer) => { err += d.toString(); });
+    proc.on("close", code => code === 0 ? resolve() : reject(new Error(err || `yt-dlp exit ${code}`)));
   });
 
 const MAX_CONCURRENT_ADAPTIVE = 2;
