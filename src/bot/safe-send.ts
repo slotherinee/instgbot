@@ -1,7 +1,10 @@
 import TelegramBot from "node-telegram-bot-api";
 import { Bot as GrammyBot } from "grammy";
+import { LOCAL_BOT_API_URL } from "../config";
 
-export const grammyApi = new GrammyBot(Bun.env.TELEGRAM_BOT!).api;
+export const grammyApi = new GrammyBot(Bun.env.TELEGRAM_BOT!, {
+  client: { apiRoot: LOCAL_BOT_API_URL }
+}).api;
 
 export const isBotBlockedError = (error: any): boolean => {
   const msg: string = error && typeof error === "object" ? error.message || String(error) : String(error);

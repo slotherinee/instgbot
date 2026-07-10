@@ -1,20 +1,14 @@
 import { spawn } from "node:child_process";
 import { Readable } from "node:stream";
-import { unlink } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import type TelegramBot from "node-telegram-bot-api";
 import { InputFile } from "grammy";
-import { BOT_TAG } from "../config";
+import { BOT_TAG, isAdmin } from "../config";
 import { grammyApi, withChatAction } from "../bot/safe-send";
 import { safeSendMessage } from "../bot/safe-send";
 import { sendErrorToAdmin } from "../bot/errors";
 import { checkYouTubeRateLimit } from "../bot/rate-limit";
-import { isAdmin } from "../config";
 import { getCachedFileId, setCachedFileId } from "../db/queries";
-import { getBotMtproto } from "../bot/mtproto";
-import { Api } from "telegram";
 
-const GRAMMY_LIMIT_MB = 50;
 const YT_DLP = process.env.YT_DLP_PATH ?? "yt-dlp";
 const STATIC_VIDEO_QUALITIES = [144, 240, 360, 480, 720];
 
@@ -33,41 +27,65 @@ const ytDlpStream = (args: string[]): Readable => {
   return proc.stdout as unknown as Readable;
 };
 
-// Download to disk (handles both muxed and adaptive+ffmpeg merge)
-const ytDlpToDisk = (args: string[], outPath: string): Promise<void> =>
-  new Promise((resolve, reject) => {
-    const proc = spawn(YT_DLP, [...args, "-o", outPath]);
-    proc.stderr.on("data", () => {});
-    proc.on("close", code => code === 0 ? resolve() : reject(new Error(`yt-dlp exit ${code}`)));
-  });
+// Adaptive formats (video-only + audio-only) piped through ffmpeg to merge on the fly.
+// No disk involved: yt-dlp writes to stdout, ffmpeg reads via extra pipe fds, muxed
+// fragmented mp4 comes out ffmpeg's stdout straight into the Telegram upload stream.
+const mergeAdaptiveStream = (url: string, videoFormatId: string, audioFormatId: string): Readable => {
+  const videoProc = spawn(YT_DLP, ["-f", videoFormatId, "--no-playlist", "-o", "-", url]);
+  const audioProc = spawn(YT_DLP, ["-f", audioFormatId, "--no-playlist", "-o", "-", url]);
+  videoProc.stderr.on("data", () => {});
+  audioProc.stderr.on("data", () => {});
 
-type FormatInfo = {
-  formatId: string;
-  sizeBytes: number;
-  sizeMB: number;
-  title: string;
-  height: number;
-  width: number;
-  duration: number;
-  thumbnailUrl: string;
+  const ffmpeg = spawn("ffmpeg", [
+    "-i", "pipe:3",
+    "-i", "pipe:4",
+    "-map", "0:v:0",
+    "-map", "1:a:0",
+    "-c", "copy",
+    "-movflags", "frag_keyframe+empty_moov+default_base_moof",
+    "-f", "mp4",
+    "pipe:1"
+  ], { stdio: ["ignore", "pipe", "pipe", "pipe", "pipe"] } as any);
+
+  (videoProc.stdout as Readable).pipe(ffmpeg.stdio[3] as NodeJS.WritableStream);
+  (audioProc.stdout as Readable).pipe(ffmpeg.stdio[4] as NodeJS.WritableStream);
+  (ffmpeg.stderr as Readable).on("data", () => {});
+
+  const killSources = () => {
+    videoProc.kill();
+    audioProc.kill();
+  };
+  ffmpeg.on("close", killSources);
+  videoProc.on("error", () => ffmpeg.kill());
+  audioProc.on("error", () => ffmpeg.kill());
+
+  return ffmpeg.stdout as unknown as Readable;
 };
 
-// Returns selected format info after yt-dlp applies the format selector
-const getFormatInfo = async (url: string, fmtStr: string): Promise<FormatInfo> => {
-  const raw = await ytDlp(["--dump-json", "--no-playlist", "--no-cache-dir", "-f", fmtStr, url]);
+type YtMeta = {
+  title: string;
+  duration: number;
+  thumbnailUrl: string;
+  formats: any[];
+};
+
+const YT_ARGS = ["--dump-json", "--no-playlist", "--no-cache-dir"];
+const ytMetaCache = new Map<string, { meta: YtMeta, expiresAt: number }>();
+
+const getYtMeta = async (url: string): Promise<YtMeta> => {
+  const cached = ytMetaCache.get(url);
+  if (cached && cached.expiresAt > Date.now()) return cached.meta;
+
+  const raw = await ytDlp([...YT_ARGS, url]);
   const info = JSON.parse(raw);
-  const sizeBytes: number = info.filesize ?? 0;
-  const sizeMB = sizeBytes? Math.round(sizeBytes / 1024 / 1024): info.filesize_approx? Math.round(info.filesize_approx / 1024 / 1024): 0;
-  return {
-    formatId: info.format_id,
-    sizeBytes,
-    sizeMB,
+  const meta: YtMeta = {
     title: info.title ?? "YouTube видео",
-    height: info.height ?? 0,
-    width: info.width ?? 0,
     duration: Math.round(info.duration ?? 0),
-    thumbnailUrl: info.thumbnail ?? ""
+    thumbnailUrl: info.thumbnail ?? "",
+    formats: info.formats ?? []
   };
+  ytMetaCache.set(url, { meta, expiresAt: Date.now() + 5 * 60 * 1000 });
+  return meta;
 };
 
 const fetchThumbnail = async (url: string): Promise<Buffer | null> => {
@@ -81,11 +99,41 @@ const fetchThumbnail = async (url: string): Promise<Buffer | null> => {
   }
 };
 
-// Adaptive formats (video+audio separate streams) require ffmpeg to merge.
-// Muxed formats (combined) have exact sizeBytes from YouTube metadata.
-// Format selector: try adaptive first (gives 480p/720p on any IP), fallback to muxed.
-const videoFmtStr = (quality: number) =>
-  `bestvideo[height<=${quality}][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=${quality}]+bestaudio/best[height<=${quality}][ext=mp4]/best[height<=${quality}]`;
+type ChosenVideo =
+  | { kind: "adaptive", videoFormatId: string, audioFormatId: string, height: number, width: number }
+  | { kind: "muxed", formatId: string, height: number, width: number };
+
+// Prefer adaptive (video-only + audio-only, merged via ffmpeg) — YouTube serves these
+// at higher resolutions even to datacenter IPs. Fall back to muxed combined formats.
+const chooseVideoFormat = (formats: any[], quality: number): ChosenVideo | null => {
+  const videoOnly = formats
+    .filter((f: any) => f.vcodec !== "none" && f.acodec === "none" && f.ext === "mp4" && (f.height ?? 0) > 0 && f.height <= quality)
+    .sort((a: any, b: any) => (b.height ?? 0) - (a.height ?? 0) || (b.tbr ?? 0) - (a.tbr ?? 0));
+  const audioOnly = formats
+    .filter((f: any) => f.vcodec === "none" && f.acodec !== "none" && f.ext === "m4a")
+    .sort((a: any, b: any) => (b.abr ?? b.tbr ?? 0) - (a.abr ?? a.tbr ?? 0));
+
+  if (videoOnly.length > 0 && audioOnly.length > 0) {
+    const v = videoOnly[0];
+    return {
+      kind: "adaptive",
+      videoFormatId: v.format_id,
+      audioFormatId: audioOnly[0].format_id,
+      height: v.height ?? 0,
+      width: v.width ?? 0
+    };
+  }
+
+  const muxed = formats
+    .filter((f: any) => f.vcodec !== "none" && f.acodec !== "none" && (f.height ?? 0) > 0 && f.height <= quality)
+    .sort((a: any, b: any) => (b.height ?? 0) - (a.height ?? 0) || ((b.ext === "mp4" ? 1 : 0) - (a.ext === "mp4" ? 1 : 0)));
+  if (muxed.length > 0) {
+    const m = muxed[0];
+    return { kind: "muxed", formatId: m.format_id, height: m.height ?? 0, width: m.width ?? 0 };
+  }
+
+  return null;
+};
 
 type PendingDownload = { url: string };
 
@@ -154,7 +202,6 @@ export const handleYouTubeCallback = async (
   const { url } = pending;
   const cacheKey = url;
   const cacheType = type === "a" ? "yt_a_best" : `yt_v_${quality}`;
-  const fmtStr = type === "a" ? "bestaudio[ext=m4a]/bestaudio" : videoFmtStr(quality);
 
   activeDownloads.add(userId);
   try {
@@ -166,7 +213,7 @@ export const handleYouTubeCallback = async (
       }
 
       await withChatAction(bot, chatId, "upload_document", async () => {
-        const stream = ytDlpStream(["-f", fmtStr, "--no-playlist", "-o", "-", url]);
+        const stream = ytDlpStream(["-f", "bestaudio[ext=m4a]/bestaudio", "--no-playlist", "-o", "-", url]);
         const msg = await grammyApi.sendAudio(chatId, new InputFile(stream, "audio.m4a"), {
           caption: BOT_TAG,
           disable_notification: true
@@ -176,97 +223,38 @@ export const handleYouTubeCallback = async (
       return;
     }
 
-    // Video — fetch format info (resolves adaptive vs muxed, gets exact formatId + size)
+    // Video
     await withChatAction(bot, chatId, "upload_video", async () => {
-      const fmt = await getFormatInfo(url, fmtStr);
+      const meta = await getYtMeta(url);
+      const chosen = chooseVideoFormat(meta.formats, quality);
+      if (!chosen) throw new Error("No video format found");
 
-      if (fmt.height > 0 && fmt.height < quality) {
-        await safeSendMessage(bot, chatId, `ℹ️ ${quality}p недоступно, скачиваю лучшее: ${fmt.height}p`);
+      if (chosen.height > 0 && chosen.height < quality) {
+        await safeSendMessage(bot, chatId, `ℹ️ ${quality}p недоступно, скачиваю лучшее: ${chosen.height}p`);
       }
 
-      // Muxed formats have exact sizeBytes; adaptive formats have sizeBytes=0
-      // Only stream to grammy when format is muxed (sizeBytes>0) and small
-      const isMuxedSmall = fmt.sizeBytes > 0 && fmt.sizeMB <= GRAMMY_LIMIT_MB;
+      const thumb = meta.thumbnailUrl ? await fetchThumbnail(meta.thumbnailUrl) : null;
+      const videoOpts: any = {
+        caption: `${meta.title}\n\n${BOT_TAG}`,
+        disable_notification: true,
+        supports_streaming: true,
+        ...(chosen.width && { width: chosen.width }),
+        ...(chosen.height && { height: chosen.height }),
+        ...(meta.duration && { duration: meta.duration }),
+        ...(thumb && { thumbnail: new InputFile(thumb, "thumb.jpg") })
+      };
 
-      if (isMuxedSmall) {
-        const thumb = fmt.thumbnailUrl ? await fetchThumbnail(fmt.thumbnailUrl) : null;
-        const videoOpts: any = {
-          caption: `${fmt.title}\n\n${BOT_TAG}`,
-          disable_notification: true,
-          supports_streaming: true,
-          ...(fmt.width && { width: fmt.width }),
-          ...(fmt.height && { height: fmt.height }),
-          ...(fmt.duration && { duration: fmt.duration }),
-          ...(thumb && { thumbnail: new InputFile(thumb, "thumb.jpg") })
-        };
-
-        const cached = getCachedFileId(cacheKey, cacheType);
-        if (cached) {
-          await grammyApi.sendVideo(chatId, cached, videoOpts);
-          return;
-        }
-        const dlStream = ytDlpStream(["-f", fmt.formatId, "--no-playlist", "-o", "-", url]);
-        const rnd = Math.floor(Math.random() * 100000) + 1;
-        const msg = await grammyApi.sendVideo(chatId, new InputFile(dlStream, `video_${rnd}.mp4`), videoOpts);
-        setCachedFileId(cacheKey, cacheType, 0, msg.video.file_id);
+      const cached = getCachedFileId(cacheKey, cacheType);
+      if (cached) {
+        await grammyApi.sendVideo(chatId, cached, videoOpts);
         return;
       }
 
-      // Large or adaptive — download to disk (ffmpeg merges automatically), upload via MTProto
-      const client = await getBotMtproto();
+      const stream = chosen.kind === "adaptive"? mergeAdaptiveStream(url, chosen.videoFormatId, chosen.audioFormatId): ytDlpStream(["-f", chosen.formatId, "--no-playlist", "-o", "-", url]);
 
-      const cachedRef = getCachedFileId(cacheKey, cacheType);
-      if (cachedRef) {
-        try {
-          const [idStr, hashStr, refHex] = cachedRef.split(":");
-          const inputMedia = new Api.InputMediaDocument({
-            id: new Api.InputDocument({
-              id: BigInt(idStr) as any,
-              accessHash: BigInt(hashStr) as any,
-              fileReference: Buffer.from(refHex, "hex")
-            })
-          });
-          await client.sendFile(chatId, {
-            file: inputMedia,
-            caption: `${fmt.title}\n\n${BOT_TAG}`,
-            supportsStreaming: true,
-            silent: true
-          });
-          return;
-        }
-        catch {
-          // stale reference — fall through to re-download
-        }
-      }
-
-      const tmpPath = `${tmpdir()}/yt_${Date.now()}.mp4`;
-      await ytDlpToDisk(["-f", fmt.formatId, "--no-playlist", "--merge-output-format", "mp4", url], tmpPath);
-      const thumb = fmt.thumbnailUrl ? await fetchThumbnail(fmt.thumbnailUrl) : null;
-      try {
-        const videoAttrs = fmt.width && fmt.height && fmt.duration? [new Api.DocumentAttributeVideo({
-          w: fmt.width,
-          h: fmt.height,
-          duration: fmt.duration,
-          supportsStreaming: true,
-          roundMessage: false
-        })]: undefined;
-        const msg = await client.sendFile(chatId, {
-          file: tmpPath,
-          caption: `${fmt.title}\n\n${BOT_TAG}`,
-          supportsStreaming: true,
-          silent: true,
-          ...(thumb && { thumb }),
-          ...(videoAttrs && { attributes: videoAttrs })
-        }) as Api.Message;
-        const doc = (msg?.media as Api.MessageMediaDocument)?.document as Api.Document | undefined;
-        if (doc?.id && doc?.accessHash && doc?.fileReference) {
-          const ref = `${doc.id}:${doc.accessHash}:${Buffer.from(doc.fileReference).toString("hex")}`;
-          setCachedFileId(cacheKey, cacheType, 0, ref);
-        }
-      }
-      finally {
-        await unlink(tmpPath).catch(() => {});
-      }
+      const rnd = Math.floor(Math.random() * 100000) + 1;
+      const msg = await grammyApi.sendVideo(chatId, new InputFile(stream, `video_${rnd}.mp4`), videoOpts);
+      setCachedFileId(cacheKey, cacheType, 0, msg.video.file_id);
     });
   }
   catch (error: any) {
