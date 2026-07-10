@@ -1,7 +1,6 @@
 import { spawn } from "node:child_process";
 import { Readable } from "node:stream";
-import { mkdtemp, rm } from "node:fs/promises";
-import { createWriteStream } from "node:fs";
+import { unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import type TelegramBot from "node-telegram-bot-api";
 import { InputFile } from "grammy";
@@ -30,53 +29,15 @@ const ytDlpStream = (args: string[]): Readable => {
   return proc.stdout as unknown as Readable;
 };
 
-const mkfifo = (path: string): Promise<void> =>
-  new Promise((res, rej) =>
-    spawn("mkfifo", [path]).on("close", code => code === 0 ? res() : rej(new Error(`mkfifo exit ${code}`)))
-  );
+const ytDlpMergeToDisk = (args: string[], outPath: string): Promise<void> =>
+  new Promise((resolve, reject) => {
+    const proc = spawn(YT_DLP, [...args, "-o", outPath]);
+    proc.stderr.on("data", () => {});
+    proc.on("close", code => code === 0 ? resolve() : reject(new Error(`yt-dlp exit ${code}`)));
+  });
 
-const mergeAdaptiveStream = async (
-  url: string,
-  videoFormatId: string,
-  audioFormatId: string
-): Promise<{ stream: Readable, cleanup: () => void }> => {
-  const dir = await mkdtemp(`${tmpdir()}/ytpipe-`);
-  const vfifo = `${dir}/v`;
-  const afifo = `${dir}/a`;
-  await mkfifo(vfifo);
-  await mkfifo(afifo);
-
-  const videoProc = spawn(YT_DLP, ["-f", videoFormatId, "--no-playlist", "-o", "-", url]);
-  const audioProc = spawn(YT_DLP, ["-f", audioFormatId, "--no-playlist", "-o", "-", url]);
-  videoProc.stderr.on("data", () => {});
-  audioProc.stderr.on("data", () => {});
-  (videoProc.stdout as Readable).pipe(createWriteStream(vfifo));
-  (audioProc.stdout as Readable).pipe(createWriteStream(afifo));
-
-  const ffmpeg = spawn("ffmpeg", [
-    "-i", vfifo,
-    "-i", afifo,
-    "-map", "0:v:0",
-    "-map", "1:a:0",
-    "-c", "copy",
-    "-movflags", "frag_keyframe+empty_moov+default_base_moof",
-    "-f", "mp4",
-    "pipe:1"
-  ]);
-  ffmpeg.stderr.on("data", () => {});
-
-  const cleanup = () => {
-    videoProc.kill();
-    audioProc.kill();
-    ffmpeg.kill();
-    rm(dir, { recursive: true, force: true }).catch(() => {});
-  };
-  ffmpeg.on("close", cleanup);
-  videoProc.on("error", cleanup);
-  audioProc.on("error", cleanup);
-
-  return { stream: ffmpeg.stdout as unknown as Readable, cleanup };
-};
+const MAX_CONCURRENT_ADAPTIVE = 2;
+let activeAdaptiveDownloads = 0;
 
 type YtMeta = {
   title: string;
@@ -268,13 +229,25 @@ export const handleYouTubeCallback = async (
       const rnd = Math.floor(Math.random() * 100000) + 1;
 
       if (chosen.kind === "adaptive") {
-        const { stream, cleanup } = await mergeAdaptiveStream(url, chosen.videoFormatId, chosen.audioFormatId);
+        if (activeAdaptiveDownloads >= MAX_CONCURRENT_ADAPTIVE) {
+          await safeSendMessage(bot, chatId, "⏳ Сервер сейчас занят обработкой видео в высоком качестве. Попробуйте через минуту.");
+          return;
+        }
+        activeAdaptiveDownloads++;
+        const tmpPath = `${tmpdir()}/yt_${Date.now()}_${rnd}.mp4`;
         try {
-          const msg = await grammyApi.sendVideo(chatId, new InputFile(stream, `video_${rnd}.mp4`), videoOpts);
+          await ytDlpMergeToDisk([
+            "-f", `${chosen.videoFormatId}+${chosen.audioFormatId}`,
+            "--no-playlist",
+            "--merge-output-format", "mp4",
+            url
+          ], tmpPath);
+          const msg = await grammyApi.sendVideo(chatId, new InputFile(tmpPath), videoOpts);
           setCachedFileId(cacheKey, cacheType, 0, msg.video.file_id);
         }
         finally {
-          cleanup();
+          activeAdaptiveDownloads--;
+          await unlink(tmpPath).catch(() => {});
         }
       }
       else {
