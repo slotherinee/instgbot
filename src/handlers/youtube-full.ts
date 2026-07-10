@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { Readable } from "node:stream";
+import { statfsSync } from "node:fs";
 import { unlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import type TelegramBot from "node-telegram-bot-api";
@@ -38,7 +39,13 @@ const ytDlpMergeToDisk = (args: string[], outPath: string): Promise<void> =>
   });
 
 const MAX_CONCURRENT_ADAPTIVE = 2;
+const MIN_FREE_DISK_BYTES = 1.5 * 1024 * 1024 * 1024; // 1.5GB safety margin
 let activeAdaptiveDownloads = 0;
+
+const hasEnoughDiskSpace = (): boolean => {
+  const stats = statfsSync(tmpdir());
+  return stats.bavail * stats.bsize > MIN_FREE_DISK_BYTES;
+};
 
 type YtMeta = {
   title: string;
@@ -230,7 +237,7 @@ export const handleYouTubeCallback = async (
       const rnd = Math.floor(Math.random() * 100000) + 1;
 
       if (chosen.kind === "adaptive") {
-        if (activeAdaptiveDownloads >= MAX_CONCURRENT_ADAPTIVE) {
+        if (activeAdaptiveDownloads >= MAX_CONCURRENT_ADAPTIVE || !hasEnoughDiskSpace()) {
           await safeSendMessage(bot, chatId, "⏳ Сервер сейчас занят обработкой видео в высоком качестве. Попробуйте через минуту.");
           return;
         }
