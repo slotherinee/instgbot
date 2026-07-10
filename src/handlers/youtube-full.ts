@@ -1,5 +1,8 @@
 import { spawn } from "node:child_process";
 import { Readable } from "node:stream";
+import { mkdtemp, rm } from "node:fs/promises";
+import { createWriteStream } from "node:fs";
+import { tmpdir } from "node:os";
 import type TelegramBot from "node-telegram-bot-api";
 import { InputFile } from "grammy";
 import { BOT_TAG, isAdmin } from "../config";
@@ -27,39 +30,52 @@ const ytDlpStream = (args: string[]): Readable => {
   return proc.stdout as unknown as Readable;
 };
 
-// Adaptive formats (video-only + audio-only) piped through ffmpeg to merge on the fly.
-// No disk involved: yt-dlp writes to stdout, ffmpeg reads via extra pipe fds, muxed
-// fragmented mp4 comes out ffmpeg's stdout straight into the Telegram upload stream.
-const mergeAdaptiveStream = (url: string, videoFormatId: string, audioFormatId: string): Readable => {
+const mkfifo = (path: string): Promise<void> =>
+  new Promise((res, rej) =>
+    spawn("mkfifo", [path]).on("close", code => code === 0 ? res() : rej(new Error(`mkfifo exit ${code}`)))
+  );
+
+const mergeAdaptiveStream = async (
+  url: string,
+  videoFormatId: string,
+  audioFormatId: string
+): Promise<{ stream: Readable, cleanup: () => void }> => {
+  const dir = await mkdtemp(`${tmpdir()}/ytpipe-`);
+  const vfifo = `${dir}/v`;
+  const afifo = `${dir}/a`;
+  await mkfifo(vfifo);
+  await mkfifo(afifo);
+
   const videoProc = spawn(YT_DLP, ["-f", videoFormatId, "--no-playlist", "-o", "-", url]);
   const audioProc = spawn(YT_DLP, ["-f", audioFormatId, "--no-playlist", "-o", "-", url]);
   videoProc.stderr.on("data", () => {});
   audioProc.stderr.on("data", () => {});
+  (videoProc.stdout as Readable).pipe(createWriteStream(vfifo));
+  (audioProc.stdout as Readable).pipe(createWriteStream(afifo));
 
   const ffmpeg = spawn("ffmpeg", [
-    "-i", "pipe:3",
-    "-i", "pipe:4",
+    "-i", vfifo,
+    "-i", afifo,
     "-map", "0:v:0",
     "-map", "1:a:0",
     "-c", "copy",
     "-movflags", "frag_keyframe+empty_moov+default_base_moof",
     "-f", "mp4",
     "pipe:1"
-  ], { stdio: ["ignore", "pipe", "pipe", "pipe", "pipe"] } as any);
+  ]);
+  ffmpeg.stderr.on("data", () => {});
 
-  (videoProc.stdout as Readable).pipe(ffmpeg.stdio[3] as NodeJS.WritableStream);
-  (audioProc.stdout as Readable).pipe(ffmpeg.stdio[4] as NodeJS.WritableStream);
-  (ffmpeg.stderr as Readable).on("data", () => {});
-
-  const killSources = () => {
+  const cleanup = () => {
     videoProc.kill();
     audioProc.kill();
+    ffmpeg.kill();
+    rm(dir, { recursive: true, force: true }).catch(() => {});
   };
-  ffmpeg.on("close", killSources);
-  videoProc.on("error", () => ffmpeg.kill());
-  audioProc.on("error", () => ffmpeg.kill());
+  ffmpeg.on("close", cleanup);
+  videoProc.on("error", cleanup);
+  audioProc.on("error", cleanup);
 
-  return ffmpeg.stdout as unknown as Readable;
+  return { stream: ffmpeg.stdout as unknown as Readable, cleanup };
 };
 
 type YtMeta = {
@@ -103,8 +119,7 @@ type ChosenVideo =
   | { kind: "adaptive", videoFormatId: string, audioFormatId: string, height: number, width: number }
   | { kind: "muxed", formatId: string, height: number, width: number };
 
-// Prefer adaptive (video-only + audio-only, merged via ffmpeg) — YouTube serves these
-// at higher resolutions even to datacenter IPs. Fall back to muxed combined formats.
+
 const chooseVideoFormat = (formats: any[], quality: number): ChosenVideo | null => {
   const videoOnly = formats
     .filter((f: any) => f.vcodec !== "none" && f.acodec === "none" && f.ext === "mp4" && (f.height ?? 0) > 0 && f.height <= quality)
@@ -250,11 +265,23 @@ export const handleYouTubeCallback = async (
         return;
       }
 
-      const stream = chosen.kind === "adaptive"? mergeAdaptiveStream(url, chosen.videoFormatId, chosen.audioFormatId): ytDlpStream(["-f", chosen.formatId, "--no-playlist", "-o", "-", url]);
-
       const rnd = Math.floor(Math.random() * 100000) + 1;
-      const msg = await grammyApi.sendVideo(chatId, new InputFile(stream, `video_${rnd}.mp4`), videoOpts);
-      setCachedFileId(cacheKey, cacheType, 0, msg.video.file_id);
+
+      if (chosen.kind === "adaptive") {
+        const { stream, cleanup } = await mergeAdaptiveStream(url, chosen.videoFormatId, chosen.audioFormatId);
+        try {
+          const msg = await grammyApi.sendVideo(chatId, new InputFile(stream, `video_${rnd}.mp4`), videoOpts);
+          setCachedFileId(cacheKey, cacheType, 0, msg.video.file_id);
+        }
+        finally {
+          cleanup();
+        }
+      }
+      else {
+        const stream = ytDlpStream(["-f", chosen.formatId, "--no-playlist", "-o", "-", url]);
+        const msg = await grammyApi.sendVideo(chatId, new InputFile(stream, `video_${rnd}.mp4`), videoOpts);
+        setCachedFileId(cacheKey, cacheType, 0, msg.video.file_id);
+      }
     });
   }
   catch (error: any) {
