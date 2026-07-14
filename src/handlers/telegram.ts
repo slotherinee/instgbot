@@ -30,6 +30,7 @@ export async function downloadStoryById ({
     if (!stories || stories.length === 0) {
       await safeSendMessage(bot, chatId, `Сторис #${storyId} не найдена у @${username}.\n${BOT_TAG}`);
       if (loadingMsg) await safeDeleteMessage(bot, chatId, loadingMsg.message_id);
+      recordDownload(chatId, `t.me/${username}/s/${storyId}`, "telegram", "story", false, username);
       return false;
     }
 
@@ -37,6 +38,7 @@ export async function downloadStoryById ({
     if (!("media" in story) || !story.media) {
       await safeSendMessage(bot, chatId, `Сторис #${storyId} не содержит медиа.\n${BOT_TAG}`);
       if (loadingMsg) await safeDeleteMessage(bot, chatId, loadingMsg.message_id);
+      recordDownload(chatId, `t.me/${username}/s/${storyId}`, "telegram", "story", false, username);
       return false;
     }
 
@@ -44,6 +46,7 @@ export async function downloadStoryById ({
     if (!Buffer.isBuffer(mediaResult)) {
       await safeSendMessage(bot, chatId, `Не удалось скачать сторис #${storyId}.\n${BOT_TAG}`);
       if (loadingMsg) await safeDeleteMessage(bot, chatId, loadingMsg.message_id);
+      recordDownload(chatId, `t.me/${username}/s/${storyId}`, "telegram", "story", false, username);
       return false;
     }
 
@@ -63,6 +66,7 @@ export async function downloadStoryById ({
     if (loadingMsg) await safeDeleteMessage(bot, chatId, loadingMsg.message_id);
     await safeSendMessage(bot, chatId, `Ошибка при загрузке сторис. Попробуйте позже.\n${BOT_TAG}`);
     await sendErrorToAdmin(bot, error, "telegram stories download", undefined, chatId, username);
+    recordDownload(chatId, `t.me/${username}/s/${storyId}`, "telegram", "story", false, username);
     return false;
   }
 }
@@ -157,6 +161,7 @@ export async function downloadTelegramPost ({
     if (messages.length === 0) {
       await safeSendMessage(bot, chatId, `Пост не найден у @${username}.\n${BOT_TAG}`);
       if (loadingMsg) await safeDeleteMessage(bot, chatId, loadingMsg.message_id);
+      recordDownload(chatId, `t.me/${username}/${postId}`, "telegram", "post", false, username);
       return false;
     }
 
@@ -173,10 +178,12 @@ export async function downloadTelegramPost ({
     if (loadingMsg) await safeDeleteMessage(bot, chatId, loadingMsg.message_id);
     if (isNoAccessError(error)) {
       await safeSendMessage(bot, chatId, `Нет доступа к каналу @${username}. Возможно, канал приватный.\n${BOT_TAG}`);
+      recordDownload(chatId, `t.me/${username}/${postId}`, "telegram", "post", false, username);
       return false;
     }
     await safeSendMessage(bot, chatId, `Ошибка при загрузке поста. Попробуйте позже.\n${BOT_TAG}`);
     await sendErrorToAdmin(bot, error, "telegram post download", undefined, chatId, username);
+    recordDownload(chatId, `t.me/${username}/${postId}`, "telegram", "post", false, username);
     return false;
   }
 }
@@ -203,6 +210,7 @@ export async function downloadPrivateTelegramPost ({
     if (messages.length === 0) {
       await safeSendMessage(bot, chatId, `Пост не найден.\n${BOT_TAG}`);
       if (loadingMsg) await safeDeleteMessage(bot, chatId, loadingMsg.message_id);
+      recordDownload(chatId, `t.me/c/${channelId}/${messageId}`, "telegram", "post", false);
       return false;
     }
 
@@ -219,10 +227,12 @@ export async function downloadPrivateTelegramPost ({
     if (loadingMsg) await safeDeleteMessage(bot, chatId, loadingMsg.message_id);
     if (isNoAccessError(error)) {
       await safeSendMessage(bot, chatId, `Нет доступа к этому каналу. Возможно, бот не является участником или канал приватный.\n${BOT_TAG}`);
+      recordDownload(chatId, `t.me/c/${channelId}/${messageId}`, "telegram", "post", false);
       return false;
     }
     await safeSendMessage(bot, chatId, `Ошибка при загрузке поста. Попробуйте позже.\n${BOT_TAG}`);
     await sendErrorToAdmin(bot, error, "telegram post download", undefined, chatId);
+    recordDownload(chatId, `t.me/c/${channelId}/${messageId}`, "telegram", "post", false);
     return false;
   }
 }
@@ -249,6 +259,7 @@ export async function downloadStories ({
     if (!result.stories || result.stories.stories.length === 0) {
       await safeSendMessage(bot, chatId, `Не удалось найти публичные сторис у @${username}. Возможно, пользователь скрыл свои сторис или у него нет публичных сторис.\n${BOT_TAG}`);
       if (loadingMsg) await safeDeleteMessage(bot, chatId, loadingMsg.message_id);
+      recordDownload(chatId, username, "telegram", "story", false, username);
       return false;
     }
 
@@ -306,21 +317,18 @@ export async function downloadStories ({
     if (successCount === 0) {
       await safeSendMessage(bot, chatId, `Сторис найдены, но не удалось загрузить медиа. Возможно, они недоступны.\n${BOT_TAG}`);
       if (loadingMsg) await safeDeleteMessage(bot, chatId, loadingMsg.message_id);
+      recordDownload(chatId, username, "telegram", "story", false, username);
       return false;
     }
     if (loadingMsg) await safeDeleteMessage(bot, chatId, loadingMsg.message_id);
-    try {
-      await recordDownload(chatId, username, "telegram", "story", true, username);
-    }
-    catch (e) {
-      console.error("Ошибка записи сторис в БД:", e);
-    }
+    recordDownload(chatId, username, "telegram", "story", true, username);
     return true;
   }
   catch (error: any) {
     if (loadingMsg) await safeDeleteMessage(bot, chatId, loadingMsg.message_id);
     await safeSendMessage(bot, chatId, `Ошибка при загрузке сторис. Попробуйте позже.\n${BOT_TAG}`);
     await sendErrorToAdmin(bot, error, "telegram stories download", undefined, chatId, username);
+    recordDownload(chatId, username, "telegram", "story", false, username);
     return false;
   }
 }

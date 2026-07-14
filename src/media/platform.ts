@@ -11,7 +11,7 @@ export const isThreadsLink = (url: string): boolean => {
 };
 
 export const isTelegramLink = (url: string): boolean => {
-  return /https?:\/\/t\.me\/[A-Za-z0-9_]/.test(url);
+  return /https?:\/\/(?:t|telegram)\.me\/[A-Za-z0-9_]/.test(url);
 };
 
 export type TelegramLinkInfo =
@@ -22,19 +22,19 @@ export type TelegramLinkInfo =
 
 export const parseTelegramLink = (url: string): TelegramLinkInfo | null => {
   // https://t.me/c/1724666497/5083 — приватный канал
-  const privateMatch = url.match(/t\.me\/c\/(\d+)\/(\d+)/);
+  const privateMatch = url.match(/(?:t|telegram)\.me\/c\/(\d+)\/(\d+)/);
   if (privateMatch) return { type: "private_post", channelId: BigInt(`-100${privateMatch[1]}`), messageId: +privateMatch[2] };
 
   // https://t.me/username/s/300 — конкретная сторис
-  const storyMatch = url.match(/t\.me\/([A-Za-z0-9_]+)\/s\/(\d+)/);
+  const storyMatch = url.match(/(?:t|telegram)\.me\/([A-Za-z0-9_]+)\/s\/(\d+)/);
   if (storyMatch) return { type: "story", username: storyMatch[1], id: +storyMatch[2] };
 
   // https://t.me/username/300 — пост в канале
-  const postMatch = url.match(/t\.me\/([A-Za-z0-9_]+)\/(\d+)/);
+  const postMatch = url.match(/(?:t|telegram)\.me\/([A-Za-z0-9_]+)\/(\d+)/);
   if (postMatch) return { type: "post", username: postMatch[1], id: +postMatch[2] };
 
   // https://t.me/username — все сторис
-  const usernameMatch = url.match(/t\.me\/([A-Za-z0-9_]+)\/?$/);
+  const usernameMatch = url.match(/(?:t|telegram)\.me\/([A-Za-z0-9_]+)\/?$/);
   if (usernameMatch) return { type: "stories_all", username: usernameMatch[1] };
 
   return null;
@@ -47,6 +47,6 @@ export const detectPlatform = (url: string): string => {
   if (url.includes("twitter.com") || url.includes("x.com")) return "twitter";
   if (url.includes("youtube.com") || url.includes("youtu.be")) return "youtube";
   if (url.includes("threads.com")) return "threads";
-  if (url.startsWith("@") || url.includes("t.me/")) return "telegram";
+  if (url.startsWith("@") || url.includes("t.me/") || url.includes("telegram.me/")) return "telegram";
   return "unknown";
 };
