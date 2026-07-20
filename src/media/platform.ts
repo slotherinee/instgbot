@@ -40,6 +40,25 @@ export const parseTelegramLink = (url: string): TelegramLinkInfo | null => {
   return null;
 };
 
+const INSTAGRAM_RESERVED_PATHS = new Set([
+  "p", "reel", "reels", "tv", "stories", "explore",
+  "accounts", "direct", "directory", "developer", "about", "legal", "api", "tags"
+]);
+
+export const getInstagramProfileUsername = (url: string): string | null => {
+  const match = url.match(/instagram\.com\/([A-Za-z0-9_.]+)\/?(?:\?\S*)?$/);
+  if (!match) return null;
+
+  const username = match[1];
+  if (INSTAGRAM_RESERVED_PATHS.has(username.toLowerCase())) return null;
+
+  return username;
+};
+
+export const toInstagramStoriesLink = (username: string): string => {
+  return `https://www.instagram.com/stories/${username}/`;
+};
+
 export const SUPPORTED_PLATFORMS = ["tiktok", "instagram", "facebook", "twitter", "youtube", "threads", "telegram"] as const;
 
 export const detectPlatform = (url: string): string => {

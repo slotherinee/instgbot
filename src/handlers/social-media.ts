@@ -4,7 +4,7 @@ import { ADMIN_USERNAME, BOT_TAG } from "../config";
 import { safeSendMessage, safeSendPhoto } from "../bot/safe-send";
 import { FileTooLargeError, sendErrorToAdmin } from "../bot/errors";
 import { fetchWithTimeout, processMediaGroup, processSinglePhoto, processSingleVideo } from "../media/download";
-import { detectPlatform } from "../media/platform";
+import { detectPlatform, getInstagramProfileUsername, toInstagramStoriesLink } from "../media/platform";
 import { recordDownload } from "../db/queries";
 
 const handleUnderlineEnding = (text: string): string => {
@@ -47,9 +47,11 @@ export const processSocialMedia = async (
   firstName?: string
 ) => {
   const platform = detectPlatform(message);
+  const instagramProfileUsername = platform === "instagram" ? getInstagramProfileUsername(message) : null;
+  const downloadTarget = instagramProfileUsername ? toInstagramStoriesLink(instagramProfileUsername) : message;
 
   try {
-    const formattedMessage = handleUnderlineEnding(message);
+    const formattedMessage = handleUnderlineEnding(downloadTarget);
     const download = await snapsave(formattedMessage, {
       retry: 3,
       retryDelay: 500,
@@ -187,7 +189,7 @@ export const processSocialMedia = async (
     const videos = media.filter((m) => m.type === "video");
     const photos = media.filter((m) => m.type === "image");
 
-    const isEphemeralStoriesPage = /instagram\.com\/stories\/[^/]+\/?$/.test(message.split("?")[0]);
+    const isEphemeralStoriesPage = /instagram\.com\/stories\/[^/]+\/?$/.test(downloadTarget.split("?")[0]);
     const postUrl = isEphemeralStoriesPage ? undefined : message.split("?")[0].replace(/\/$/, "");
     let hasSuccessfulDownload = false;
     let photoProcessed = false;
