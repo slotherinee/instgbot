@@ -175,6 +175,23 @@ export const getNewsletterStats = (): { total: number, subscribed: number, unsub
   return result || { total: 0, subscribed: 0, unsubscribed: 0 };
 };
 
+export const setPlatformDisabled = (platform: string, disabled: boolean): void => {
+  db.query(`
+    INSERT INTO platform_status (platform, disabled) VALUES (?, ?)
+    ON CONFLICT (platform) DO UPDATE SET disabled = excluded.disabled
+  `).run(platform, disabled ? 1 : 0);
+};
+
+export const isPlatformDisabled = (platform: string): boolean => {
+  const row = db.query("SELECT disabled FROM platform_status WHERE platform = ?").get(platform) as { disabled: number } | undefined;
+  return row?.disabled === 1;
+};
+
+export const getDisabledPlatforms = (): string[] => {
+  return (db.query("SELECT platform FROM platform_status WHERE disabled = 1").all() as { platform: string }[])
+    .map(row => row.platform);
+};
+
 export const getCachedFileId = (postUrl: string, mediaType: string, index = 0): string | null => {
   const row = db.query("SELECT file_id FROM media_cache WHERE post_url = ? AND media_type = ? AND media_index = ?")
     .get(postUrl, mediaType, index) as { file_id: string } | undefined;

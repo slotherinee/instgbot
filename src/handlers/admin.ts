@@ -1,16 +1,19 @@
 import TelegramBot from "node-telegram-bot-api";
 import {
   getAllUsers,
+  getDisabledPlatforms,
   getNewsletterStats,
   getPlatformStats,
   getRecentErrors,
   getStats,
   getTopUsers,
-  getUsers
+  getUsers,
+  setPlatformDisabled
 } from "../db/queries";
 import { ADMIN_USER_IDS, BOT_TAG, isAdmin } from "../config";
 import { safeSendMessage } from "../bot/safe-send";
 import { splitMessage } from "../utils/messages";
+import { SUPPORTED_PLATFORMS } from "../media/platform";
 
 // Admin commands handler
 export const handleAdminCommands = async (
@@ -47,6 +50,12 @@ export const handleAdminCommands = async (
       return true;
     case "/announce":
       await handleAnnouncementCommand(bot, chatId, message);
+      return true;
+    case "/poff":
+      await handlePlatformToggleCommand(bot, chatId, args, true);
+      return true;
+    case "/pon":
+      await handlePlatformToggleCommand(bot, chatId, args, false);
       return true;
     default:
       return false;
@@ -204,6 +213,22 @@ const handlePlatformsCommand = async (bot: TelegramBot, chatId: number) => {
   }
 };
 
+const handlePlatformToggleCommand = async (bot: TelegramBot, chatId: number, args: string[], disabled: boolean) => {
+  const platform = args[0]?.toLowerCase();
+
+  if (!platform || !SUPPORTED_PLATFORMS.includes(platform as any)) {
+    await safeSendMessage(bot, chatId, `Укажите платформу: ${SUPPORTED_PLATFORMS.join(", ")}\n\nПример: /${disabled ? "poff" : "pon"} instagram`);
+    return;
+  }
+
+  setPlatformDisabled(platform, disabled);
+
+  const disabledNow = getDisabledPlatforms();
+  const statusLine = disabledNow.length > 0 ? `🔴 Выключены: ${disabledNow.join(", ")}` : "🟢 Все платформы включены";
+
+  await safeSendMessage(bot, chatId, `${disabled ? "🔴" : "🟢"} Платформа ${platform} ${disabled ? "выключена" : "включена"}.\n\n${statusLine}`);
+};
+
 const handleAnnouncementCountCommand = async (bot: TelegramBot, chatId: number) => {
   try {
     const newsletterStats = getNewsletterStats();
@@ -239,12 +264,18 @@ const handleAdminHelpCommand = async (bot: TelegramBot, chatId: number) => {
     "📱 /platforms - статистика по платформам",
     "📢 /announce [сообщение] - отправить объявление подписанным пользователям",
     "📈 /announceCount - статистика подписок на рассылку",
+    "🔴 /poff <платформа> - выключить платформу",
+    "🟢 /pon <платформа> - включить платформу обратно",
     "❓ /ah - эта справка",
     "",
     "Примеры:",
     "• /users 10 - показать 10 пользователей",
     "• /top 5 - топ 5 пользователей",
     "• /errors 3 - последние 3 ошибки",
+    `• /poff instagram - выключить Instagram`,
+    `• /pon instagram - включить Instagram обратно`,
+    "",
+    `Доступные платформы: ${SUPPORTED_PLATFORMS.join(", ")}`,
     "",
     "ℹ️ Рассылка отправляется только пользователям с включенной подпиской (/newsletter)"
   ].join("\n");

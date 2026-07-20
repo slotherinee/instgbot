@@ -1,12 +1,12 @@
 import type TelegramBot from "node-telegram-bot-api";
 import type { TelegramClient } from "telegram";
 import { handleAdminCommands } from "../handlers/admin";
-import { upsertUser } from "../db/queries";
+import { isPlatformDisabled, upsertUser } from "../db/queries";
 import { BOT_TAG, isAdmin } from "../config";
 import { safeSendMessage } from "./safe-send";
 import { sendErrorToAdmin } from "./errors";
 import { checkRateLimit, checkTelegramStoriesRateLimit, sendRateLimitMessage } from "./rate-limit";
-import { isTelegramLink, isThreadsLink, isYoutubeLink, isYoutubeShortsLink, parseTelegramLink } from "../media/platform";
+import { detectPlatform, isTelegramLink, isThreadsLink, isYoutubeLink, isYoutubeShortsLink, parseTelegramLink } from "../media/platform";
 import { processSocialMedia } from "../handlers/social-media";
 import { processThreads } from "../handlers/threads";
 import { processYouTubeShorts } from "../handlers/youtube";
@@ -31,6 +31,16 @@ const START_MESSAGE = [
   "",
   BOT_TAG
 ].join("\n");
+
+async function rejectIfPlatformDisabled (bot: TelegramBot, chatId: number, message: string, userId?: number): Promise<boolean> {
+  if (isAdmin(userId)) return false;
+
+  const platform = detectPlatform(message);
+  if (!isPlatformDisabled(platform)) return false;
+
+  await safeSendMessage(bot, chatId, "😔 Скачивание с этой платформы временно не работает. Мы уже занимаемся этим.");
+  return true;
+}
 
 async function handleTelegramContent (
   bot: TelegramBot,
@@ -96,6 +106,8 @@ async function handleMediaUrl (
     }
   }
 
+  if (await rejectIfPlatformDisabled(bot, chatId, message, userId)) return;
+
   if (isYoutubeShortsLink(message)) {
     await processYouTubeShorts(bot, chatId, message, username, firstName);
   }
@@ -151,6 +163,8 @@ export function registerMessageHandlers (bot: TelegramBot, userClient: TelegramC
     const isTelegramContent = isTelegramUsername || (isValidUrl && isTelegramLink(message));
 
     if (isTelegramContent) {
+      if (await rejectIfPlatformDisabled(bot, chatId, message, userId)) return;
+
       try {
         await handleTelegramContent(bot, userClient, message, chatId, userId ?? chatId);
       }

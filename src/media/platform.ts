@@ -40,6 +40,8 @@ export const parseTelegramLink = (url: string): TelegramLinkInfo | null => {
   return null;
 };
 
+export const SUPPORTED_PLATFORMS = ["tiktok", "instagram", "facebook", "twitter", "youtube", "threads", "telegram"] as const;
+
 export const detectPlatform = (url: string): string => {
   if (url.includes("tiktok.com")) return "tiktok";
   if (url.includes("instagram.com")) return "instagram";

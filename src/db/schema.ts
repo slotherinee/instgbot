@@ -42,6 +42,13 @@ db.exec(`
 `);
 
 db.exec(`
+  CREATE TABLE IF NOT EXISTS platform_status (
+    platform TEXT PRIMARY KEY,
+    disabled INTEGER NOT NULL DEFAULT 0
+  )
+`);
+
+db.exec(`
   CREATE TABLE IF NOT EXISTS media_cache (
     post_url TEXT NOT NULL,
     media_type TEXT NOT NULL,
