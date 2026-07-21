@@ -57,6 +57,9 @@ export const handleAdminCommands = async (
     case "/pon":
       await handlePlatformToggleCommand(bot, chatId, args, false);
       return true;
+    case "/pstatus":
+      await handlePlatformStatusCommand(bot, chatId);
+      return true;
     default:
       return false;
   }
@@ -229,6 +232,18 @@ const handlePlatformToggleCommand = async (bot: TelegramBot, chatId: number, arg
   await safeSendMessage(bot, chatId, `${disabled ? "🔴" : "🟢"} Платформа ${platform} ${disabled ? "выключена" : "включена"}.\n\n${statusLine}`);
 };
 
+const handlePlatformStatusCommand = async (bot: TelegramBot, chatId: number) => {
+  const disabled = new Set(getDisabledPlatforms());
+
+  const message = [
+    "📡 Статус платформ:",
+    "",
+    ...SUPPORTED_PLATFORMS.map(p => `${disabled.has(p) ? "🔴" : "🟢"} ${p}`)
+  ].join("\n");
+
+  await safeSendMessage(bot, chatId, message);
+};
+
 const handleAnnouncementCountCommand = async (bot: TelegramBot, chatId: number) => {
   try {
     const newsletterStats = getNewsletterStats();
@@ -266,6 +281,7 @@ const handleAdminHelpCommand = async (bot: TelegramBot, chatId: number) => {
     "📈 /announceCount - статистика подписок на рассылку",
     "🔴 /poff <платформа> - выключить платформу",
     "🟢 /pon <платформа> - включить платформу обратно",
+    "📡 /pstatus - статус всех платформ",
     "❓ /ah - эта справка",
     "",
     "Примеры:",
